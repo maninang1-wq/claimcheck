@@ -223,10 +223,10 @@ const HOUSING_SUITS = [
 const ALL_SUITS = [...TECH_SUITS, ...AUTO_SUITS, ...FOOD_SUITS, ...PHARMA_SUITS, ...HOUSING_SUITS];
 
 // ─── NHTSA API HELPERS ────────────────────────────────────────────────────────
-const NHTSA_VIN_URL    = v     => `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVin/${v}?format=json`;
-const NHTSA_RECALL_VIN = v     => `https://api.nhtsa.dot.gov/recalls/recallsByVin?vin=${v}`;
-const NHTSA_RECALL_VEH = (mk,mo,yr) => `https://api.nhtsa.dot.gov/recalls/recallsByVehicle?make=${encodeURIComponent(mk)}&model=${encodeURIComponent(mo)}&modelYear=${yr}`;
-const NHTSA_MODELS_URL = (mk,yr) => `https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/${encodeURIComponent(mk)}/modelyear/${yr}?format=json`;
+const NHTSA_VIN_URL = v => `/api/nhtsa?type=decodeVin&vin=${encodeURIComponent(v)}`;
+const NHTSA_RECALL_VIN = v => `/api/nhtsa?type=recallsByVin&vin=${encodeURIComponent(v)}`;
+const NHTSA_RECALL_VEH = (mk,mo,yr) => `/api/nhtsa?type=recallsByVehicle&make=${encodeURIComponent(mk)}&model=${encodeURIComponent(mo)}&year=${encodeURIComponent(yr)}`;
+const NHTSA_MODELS_URL = (mk,yr) => `/api/nhtsa?type=models&make=${encodeURIComponent(mk)}&year=${encodeURIComponent(yr)}`;
 
 const MAKES_LIST = ["Acura","Audi","BMW","Buick","Cadillac","Chevrolet","Chrysler","Dodge","Ford","GMC","Honda","Hyundai","Jeep","Kia","Lexus","Lincoln","Mazda","Mercedes-Benz","Mitsubishi","Nissan","Pontiac","Porsche","Ram","Saturn","Subaru","Tesla","Toyota","Volkswagen","Volvo"];
 const YEARS_LIST = Array.from({length:25},(_,i)=>2024-i);
