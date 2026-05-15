@@ -1,1102 +1,824 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 
-// ─── CATEGORY REGISTRY ────────────────────────────────────────────────────────
-// To add a new vertical: add an entry here + a data file below.
-// The app renders everything dynamically from this registry.
-const CATEGORIES = [
-  { id: "all",  label: "All Claims",    icon: "⚖️", color: "#f97316", desc: "Every open settlement" },
-  { id: "tech", label: "Tech & Privacy",icon: "💻", color: "#6366f1", desc: "Data breaches, privacy violations, consumer fraud" },
-  { id: "auto", label: "Automotive",    icon: "🚗", color: "#dc2626", desc: "Recalls, defects, emissions fraud" },
+const NHTSA_DECODE  = v => "/api/nhtsa?type=decodeVin&vin=" + v;
+const NHTSA_RECALL  = v => "/api/nhtsa?type=recallsByVin&vin=" + v;
+const NHTSA_VEHICLE = (mk, mo, yr) => "/api/nhtsa?type=recallsByVehicle&make=" + encodeURIComponent(mk) + "&model=" + encodeURIComponent(mo) + "&year=" + yr;
+const NHTSA_MODELS  = (mk, yr) => "/api/nhtsa?type=models&make=" + encodeURIComponent(mk) + "&year=" + yr;
+
+const MAKES = ["Toyota","Honda","Ford","Chevrolet","Volkswagen","Tesla","Jeep","Ram","Nissan","Hyundai","Kia","BMW","Mercedes-Benz","Subaru","Mazda","Dodge","Lexus","Acura","Infiniti","Cadillac","GMC","Buick","Lincoln","Volvo","Other"];
+const YEARS = Array.from({ length: 25 }, (_, i) => 2024 - i);
+const ISSUES = [
+{ id:"engine",       icon:"🔧", name:"Engine Failure",        desc:"Oil consumption, stalling, knocking, or complete failure" },
+{ id:"transmission", icon:"⚙️", name:"Transmission",          desc:"Shuddering, slipping, hesitation, or failure to shift" },
+{ id:"battery",      icon:"🔋", name:"Battery / EV System",   desc:"Degradation, reduced range, charging failure, or fire risk" },
+{ id:"brakes",       icon:"🛑", name:"Brakes",                desc:"Failure, premature wear, or unintended engagement" },
+{ id:"cooling",      icon:"🌡️", name:"Cooling System",        desc:"Overheating, coolant leaks, or head gasket failure" },
+{ id:"airbag",       icon:"💨", name:"Airbag / Safety",       desc:"Recall-related airbag, sensor, or ADAS system issues" },
+{ id:"rust",         icon:"🦀", name:"Rust / Corrosion",      desc:"Premature frame, body, or undercarriage corrosion" },
+{ id:"electrical",   icon:"⚡", name:"Electrical",            desc:"Wiring failures, module issues, or infotainment problems" },
+{ id:"oil",          icon:"🛢️", name:"Oil / Fluids",          desc:"Excessive consumption, leaks, or contamination" },
+{ id:"suspension",   icon:"🚗", name:"Suspension / Steering", desc:"Pulling, vibration, premature wear, or failure" },
+];
+const DEALER_OUTCOMES = ["Repaired under warranty","Repaired — but issue returned","Dismissed as 'normal'","Repair refused under warranty","Quoted high out-of-pocket cost","Said they couldn't reproduce the issue","Still waiting for resolution"];
+const COST_RANGES = ["$0 — covered under warranty","$1 – $500","$500 – $2,000","$2,000 – $5,000","$5,000 – $10,000","Over $10,000"];
+const STEPS = [
+{ id:"vehicle", num:1, label:"Your Vehicle",   sub:"Tell us what you drive" },
+{ id:"issue",   num:2, label:"The Problem",    sub:"Describe what's happening" },
+{ id:"history", num:3, label:"Repair History", sub:"What you've tried so far" },
+{ id:"docs",    num:4, label:"Documentation",  sub:"Upload your evidence" },
+{ id:"contact", num:5, label:"Your Info",      sub:"Where to send results" },
+];
+const FAQS_DATA = [
+{ q:"Is this free to use?", a:"Yes, completely free. ClaimCheck is a consumer documentation platform. There's no charge to submit your vehicle issue or receive your results summary." },
+{ q:"Does submitting mean I'm filing a lawsuit?", a:"No. Submitting creates a documented record of your vehicle defect. You remain in full control of any next steps. We present options — you decide." },
+{ q:"What happens after I submit?", a:"We cross-reference your submission against known defect patterns, active NHTSA recalls, and TSBs. You'll receive a summary within 1–2 business days." },
+{ q:"Do I need a lawyer to use this?", a:"No. ClaimCheck is a documentation tool. If your case qualifies for legal review, we can connect you with an independent licensed attorney at no cost — entirely your choice." },
+{ q:"What vehicles do you cover?", a:"All makes and models sold in the US, with particular expertise in Toyota, Honda, Ford, GM, Volkswagen, Tesla, and Stellantis vehicles." },
+{ q:"Is my information secure?", a:"All submissions are encrypted in transit and at rest. We never sell your personal information to third parties." },
 ];
 
-// ─── TECH SETTLEMENTS ─────────────────────────────────────────────────────────
-const TECH_SUITS = [
-  { id:"t1", cat:"tech", company:"Meta (Facebook)", icon:"👤", payout:397, ps:"$397", deadline:"Aug 1, 2025", urgent:true,
-    desc:"Facebook collected facial recognition data without consent from Illinois users 2011–2022.",
-    detail:"The $650M settlement covers Illinois residents tagged in photos on Facebook.",
-    firm:"Edelson PC", firmPPL:350,
-    qs:[{id:"state",text:"Did you live in Illinois between 2011–2022?",req:true},{id:"acct",text:"Did you have a Facebook account?",req:true},{id:"photo",text:"Were you tagged in photos?",req:true}] },
-  { id:"t2", cat:"tech", company:"Google", icon:"🔍", payout:250, ps:"$250", deadline:"Oct 15, 2025", urgent:false,
-    desc:"Google tracked users' location even after they turned off Location History.",
-    detail:"Android and Google Maps users with a Google account between 2014–2023 are covered.",
-    firm:"Lieff Cabraser", firmPPL:280,
-    qs:[{id:"acct",text:"Did you have a Google account between 2014–2023?",req:true},{id:"android",text:"Did you use Android or Google Maps?",req:true}] },
-  { id:"t3", cat:"tech", company:"TikTok", icon:"🎵", payout:167, ps:"$167", deadline:"Jul 30, 2025", urgent:true,
-    desc:"TikTok collected biometric data and violated children's privacy laws (COPPA).",
-    detail:"TikTok harvested facial geometry and voice prints without consent.",
-    firm:"Robbins Geller", firmPPL:250,
-    qs:[{id:"used",text:"Did you use TikTok between 2019–2023?",req:true}] },
-  { id:"t4", cat:"tech", company:"T-Mobile", icon:"📱", payout:25000, ps:"$25,000", deadline:"Jan 10, 2026", urgent:false,
-    desc:"T-Mobile's 2021 breach exposed names, SSNs, and addresses of 76M+ customers.",
-    detail:"Customers and applicants before August 2021 may claim up to $25,000.",
-    firm:"Keller Postman", firmPPL:425,
-    qs:[{id:"cust",text:"Were you a T-Mobile customer before August 2021?",req:true},{id:"notif",text:"Did you get a breach notification?",req:false}] },
-  { id:"t5", cat:"tech", company:"Amazon", icon:"📦", payout:100, ps:"$100", deadline:"Sep 5, 2025", urgent:false,
-    desc:"Amazon enrolled users in Prime without clear consent and hid the cancel button.",
-    detail:"The FTC found Amazon used dark patterns to trap users in Prime subscriptions.",
-    firm:"Hagens Berman", firmPPL:200,
-    qs:[{id:"prime",text:"Were you enrolled in Amazon Prime between 2018–2023?",req:true},{id:"charge",text:"Did you have unexpected charges or difficulty canceling?",req:true}] },
-  { id:"t6", cat:"tech", company:"Apple", icon:"💻", payout:395, ps:"$395", deadline:"Nov 20, 2025", urgent:false,
-    desc:"Apple knowingly sold MacBooks with defective butterfly keyboards that failed prematurely.",
-    detail:"MacBook Pro and Air 2015–2019 are covered. More if you paid out of pocket for repair.",
-    firm:"Girard Sharp", firmPPL:275,
-    qs:[{id:"model",text:"Did you own a MacBook Pro or Air (2015–2019)?",req:true},{id:"keys",text:"Did your keyboard malfunction?",req:true}] },
-  { id:"t7", cat:"tech", company:"Equifax", icon:"🏦", payout:20000, ps:"$20,000", deadline:"Jan 22, 2026", urgent:true,
-    desc:"Equifax exposed SSNs, birth dates, and financial data of 147 million Americans in 2017.",
-    detail:"Claim up to 10 hours lost at $25/hr plus reimbursement for fraud expenses.",
-    firm:"Alston & Bird", firmPPL:380,
-    qs:[{id:"notif",text:"Were you notified of the 2017 Equifax breach?",req:true}] },
-  { id:"t8", cat:"tech", company:"Zoom", icon:"📹", payout:85, ps:"$85", deadline:"Dec 1, 2025", urgent:false,
-    desc:"Zoom secretly shared user data with Facebook and LinkedIn without consent.",
-    detail:"Registered users from March 2013–July 2021 are covered.",
-    firm:"Cotchett Pitre", firmPPL:150,
-    qs:[{id:"used",text:"Did you use Zoom between March 2013 and July 2021?",req:true},{id:"acct",text:"Did you have a registered Zoom account?",req:true}] },
-];
-
-// ─── AUTO SETTLEMENTS ─────────────────────────────────────────────────────────
-const AUTO_SUITS = [
-  { id:"a1", cat:"auto", company:"Takata / Multiple OEMs", icon:"💥", payout:5000, ps:"$1,500–$9,000", deadline:"Ongoing", urgent:false,
-    makes:["Honda","Acura","Toyota","Mazda","Subaru","Ford","BMW","Nissan","Chrysler"],
-    desc:"Defective Takata airbag inflators can rupture and send metal shrapnel into the cabin — 27 US deaths confirmed.",
-    detail:"The largest auto recall in history. 67M vehicles affected. If your vehicle had an open recall you may be entitled to significant compensation beyond the free repair.",
-    firm:"Motley Rice", firmPPL:600,
-    vinKeywords:["takata","air bag","airbag","inflator"],
-    qs:[{id:"recall",text:"Did your vehicle have an open Takata airbag recall?",req:true},{id:"injury",text:"Did you or a passenger experience injury from airbag deployment?",req:false}] },
-  { id:"a2", cat:"auto", company:"Volkswagen / Audi", icon:"🌿", payout:7500, ps:"$5,100–$10,000", deadline:"Ongoing", urgent:false,
-    makes:["Volkswagen","Audi","Porsche"],
-    desc:"VW installed defeat devices to cheat EPA emissions tests on TDI diesel vehicles, deceiving customers about performance and resale value.",
-    detail:"The $14.7B Dieselgate settlement still has active claims for owners who experienced diminished resale value.",
-    firm:"Lieff Cabraser", firmPPL:750,
-    vinKeywords:["emission","diesel","tdi","defeat device"],
-    qs:[{id:"tdi",text:"Did you own a VW, Audi, or Porsche TDI diesel (2009–2016)?",req:true},{id:"sold",text:"Did you sell at a loss after the scandal broke?",req:false}] },
-  { id:"a3", cat:"auto", company:"Ford", icon:"🔧", payout:4000, ps:"$2,325–$6,000", deadline:"Dec 31, 2025", urgent:true,
-    makes:["Ford"],
-    desc:"Ford's PowerShift dual-clutch transmission in Focus and Fiesta was fundamentally defective — Ford trained dealers to manage expectations instead of fixing it.",
-    detail:"Owners experienced shuddering, hesitation, and complete transmission failure. Ford knew before launch.",
-    firm:"Hagens Berman", firmPPL:450,
-    vinKeywords:["powershift","transmission","dual clutch","focus","fiesta","shudder"],
-    qs:[{id:"own",text:"Did you own a Ford Focus (2012–2016) or Fiesta (2011–2016)?",req:true},{id:"trans",text:"Did your transmission shudder, hesitate, or fail?",req:true}] },
-  { id:"a4", cat:"auto", company:"General Motors", icon:"⚡", payout:15000, ps:"$300–$1,000,000", deadline:"Ongoing", urgent:false,
-    makes:["Chevrolet","Pontiac","Saturn","GMC","Buick"],
-    desc:"GM knew for over a decade that faulty ignition switches could cut engine power and disable airbags mid-drive. At least 124 deaths linked.",
-    detail:"Personal injury and wrongful death claims are still being processed. Cobalt, Ion, G5, HHR, Solstice, Sky.",
-    firm:"Napoli Shkolnik", firmPPL:800,
-    vinKeywords:["ignition","switch","stall","cobalt","ion","g5"],
-    qs:[{id:"own",text:"Did you own a Chevrolet Cobalt, Saturn Ion, Pontiac G5, or similar (2003–2014)?",req:true},{id:"injury",text:"Did you experience injury related to this defect?",req:false}] },
-  { id:"a5", cat:"auto", company:"Honda / Acura", icon:"🛢️", payout:2500, ps:"$1,500–$4,000", deadline:"Aug 30, 2025", urgent:true,
-    makes:["Honda","Acura"],
-    desc:"Honda's 1.5L turbo allows gasoline to contaminate engine oil in cold weather, dramatically accelerating engine wear.",
-    detail:"Honda blamed driving habits before acknowledging the defect in court. CR-V, Civic, Accord, Acura ILX/TLX.",
-    firm:"Girard Sharp", firmPPL:400,
-    vinKeywords:["oil dilution","gasoline","1.5","turbo","cr-v","civic"],
-    qs:[{id:"own",text:"Did you own a Honda CR-V, Civic, Accord, or Acura with a 1.5T (2016–2021)?",req:true},{id:"smell",text:"Did you notice a gasoline smell from the oil or rising oil level?",req:false}] },
-  { id:"a6", cat:"auto", company:"Tesla", icon:"⚡", payout:5000, ps:"$500–$15,000", deadline:"Mar 15, 2026", urgent:false,
-    makes:["Tesla"],
-    desc:"Tesla marketed Full Self-Driving capability that regulators found is neither full nor self-driving — customers paid up to $15,000 for features that weren't delivered.",
-    detail:"Multiple class actions allege consumer fraud. Covers all Tesla owners 2016–2024, especially FSD purchasers.",
-    firm:"Cotchett Pitre", firmPPL:700,
-    vinKeywords:["autopilot","full self driving","fsd","phantom braking"],
-    qs:[{id:"own",text:"Did you purchase a Tesla between 2016–2024?",req:true},{id:"fsd",text:"Did you pay for Full Self-Driving (FSD)?",req:false}] },
-  { id:"a7", cat:"auto", company:"Chrysler / Jeep / Ram", icon:"🐏", payout:4500, ps:"$2,000–$8,500", deadline:"Ongoing", urgent:false,
-    makes:["Dodge","Jeep","Ram","Chrysler"],
-    desc:"FCA's 5.7L and 6.4L HEMI V8 engines suffer premature lifter and camshaft failure. The characteristic tick often precedes complete engine failure costing $4,000+.",
-    detail:"Ram 1500/2500, Dodge Durango, Jeep Grand Cherokee. FCA knew about the defect before launch.",
-    firm:"Keller Postman", firmPPL:500,
-    vinKeywords:["hemi","lifter","camshaft","tick","5.7","6.4"],
-    qs:[{id:"own",text:"Did you own a Ram 1500, Dodge Durango, or Jeep Grand Cherokee with a HEMI (2019–2024)?",req:true},{id:"tick",text:"Did you experience persistent engine ticking or knocking?",req:false}] },
-  { id:"a8", cat:"auto", company:"Subaru", icon:"🔩", payout:2000, ps:"$1,200–$3,500", deadline:"Ongoing", urgent:false,
-    makes:["Subaru"],
-    desc:"Subaru's FB20/FB25 engines burn through a quart of oil every 1,000 miles. Subaru called it 'normal' before quietly extending warranties and settling a class action.",
-    detail:"Outback, Legacy, Forester, Impreza 2011–2015. Owners who paid for repairs may be reimbursed.",
-    firm:"Robbins Geller", firmPPL:350,
-    vinKeywords:["oil consumption","burning oil","outback","legacy","forester"],
-    qs:[{id:"own",text:"Did you own a Subaru Outback, Legacy, Forester, or Impreza (2011–2015)?",req:true},{id:"oil",text:"Did your vehicle consume more than 1 quart per 1,200 miles?",req:false}] },
-];
-
-// ─── MASTER SUITS INDEX ───────────────────────────────────────────────────────
-// To add a new vertical: create a new _SUITS array above and spread it here.
-const ALL_SUITS = [...TECH_SUITS, ...AUTO_SUITS];
-
-// ─── NHTSA API HELPERS ────────────────────────────────────────────────────────
-const NHTSA_VIN_URL = v => `/api/nhtsa?type=decodeVin&vin=${encodeURIComponent(v)}`;
-const NHTSA_RECALL_VIN = v => `/api/nhtsa?type=recallsByVin&vin=${encodeURIComponent(v)}`;
-const NHTSA_RECALL_VEH = (mk,mo,yr) => `/api/nhtsa?type=recallsByVehicle&make=${encodeURIComponent(mk)}&model=${encodeURIComponent(mo)}&year=${encodeURIComponent(yr)}`;
-const NHTSA_MODELS_URL = (mk,yr) => `/api/nhtsa?type=models&make=${encodeURIComponent(mk)}&year=${encodeURIComponent(yr)}`;
-
-const MAKES_LIST = ["Acura","Audi","BMW","Buick","Cadillac","Chevrolet","Chrysler","Dodge","Ford","GMC","Honda","Hyundai","Jeep","Kia","Lexus","Lincoln","Mazda","Mercedes-Benz","Mitsubishi","Nissan","Pontiac","Porsche","Ram","Saturn","Subaru","Tesla","Toyota","Volkswagen","Volvo"];
-const YEARS_LIST = Array.from({length:25},(_,i)=>2024-i);
-
-function nhtsaSeverity(recall) {
-  const t = (recall.Consequence||"").toLowerCase();
-  if (t.includes("death")||t.includes("fatal")||t.includes("fire")) return {label:"CRITICAL",color:"#ef4444"};
-  if (t.includes("injur")||t.includes("crash")||t.includes("accident")) return {label:"HIGH",color:"#f97316"};
-  return {label:"MODERATE",color:"#f59e0b"};
-}
-
-function matchRecallToSuits(recall) {
-  const text = [recall.Component||"",recall.Summary||"",recall.Consequence||""].join(" ").toLowerCase();
-  return AUTO_SUITS.filter(s => s.vinKeywords?.some(kw => text.includes(kw)));
-}
-
-// ─── CSS ──────────────────────────────────────────────────────────────────────
 const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800;12..96,900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
-body{background:#f8f8f8;}
+:root{
+  --navy:#0B1120;--navy3:#1E2A3D;
+  --teal:#00C2A8;--teal2:#009E8A;
+  --white:#FAFBFC;--warm:#F7F6F3;
+  --slate:#64748B;--muted:#94A3B8;
+  --border:rgba(0,0,0,0.08);
+  --serif:'Instrument Serif',Georgia,serif;
+  --sans:'DM Sans',system-ui,sans-serif;
+}
+html{scroll-behavior:smooth;}
+body{background:var(--white);font-family:var(--sans);color:var(--navy);overflow-x:hidden;}
 ::-webkit-scrollbar{width:4px;}
-::-webkit-scrollbar-thumb{background:#e2e2e2;border-radius:99px;}
-.app{min-height:100vh;background:#f8f8f8;color:#111;font-family:'Bricolage Grotesque',sans-serif;}
+::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:99px;}
+button,input,select,textarea{font-family:var(--sans);}
+.app{min-height:100vh;}
 
 /* NAV */
-.nav{height:56px;background:rgba(255,255,255,0.95);backdrop-filter:blur(24px);border-bottom:1px solid #e5e5e5;display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:100;}
-.nav-logo{display:flex;align-items:center;gap:10px;cursor:pointer;}
-.nav-logo-icon{width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,#f97316,#ef4444);display:flex;align-items:center;justify-content:center;font-size:13px;box-shadow:0 0 16px rgba(249,115,22,0.25);}
-.nav-logo-name{font-size:15px;font-weight:900;letter-spacing:-0.5px;color:#111;}
-.nav-center{display:flex;gap:2px;}
-.ntab{background:transparent;border:none;color:#888;font-family:inherit;font-size:13px;font-weight:600;padding:7px 13px;border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:5px;transition:all 0.15s;}
-.ntab:hover{color:#111;background:rgba(0,0,0,0.05);}
-.ntab.on{color:#111;background:rgba(0,0,0,0.07);font-weight:700;}
-.nbadge{background:#f97316;color:#fff;font-size:9px;font-weight:800;padding:2px 6px;border-radius:100px;}
-.nbadge.g{background:#16a34a;color:#fff;}
-.nav-right{display:flex;align-items:center;gap:8px;}
-.pot-pill{background:rgba(22,163,74,0.08);border:1px solid rgba(22,163,74,0.25);color:#16a34a;font-size:12px;font-weight:800;padding:6px 12px;border-radius:8px;cursor:pointer;}
-.nav-btn{background:rgba(249,115,22,0.1);border:1px solid rgba(249,115,22,0.25);color:#f97316;font-family:inherit;font-size:12px;font-weight:700;padding:7px 14px;border-radius:8px;cursor:pointer;transition:all 0.15s;}
-.nav-btn:hover{background:rgba(249,115,22,0.18);}
-
-/* NOTIF */
-.notif{background:#fff3f3;border-bottom:1px solid #fecaca;padding:9px 24px;display:flex;align-items:center;gap:10px;font-size:13px;}
-.notif-dot{width:7px;height:7px;border-radius:50%;background:#ef4444;flex-shrink:0;animation:blink 1.5s infinite;}
-@keyframes blink{0%,100%{opacity:1}50%{opacity:0.3}}
-.notif-text{flex:1;color:#b91c1c;}
-.notif-text strong{color:#991b1b;}
-.notif-x{background:transparent;border:none;color:#aaa;cursor:pointer;font-size:16px;}
+.nav{height:62px;background:rgba(250,251,252,0.9);backdrop-filter:blur(20px);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100;display:flex;align-items:center;justify-content:space-between;padding:0 28px;}
+.nav-brand{display:flex;align-items:center;gap:10px;cursor:pointer;}
+.nav-mark{width:34px;height:34px;border-radius:9px;background:var(--navy);display:flex;align-items:center;justify-content:center;}
+.nav-name{font-size:16px;font-weight:700;color:var(--navy);letter-spacing:-0.3px;}
+.nav-tag{font-size:11px;color:var(--teal2);font-weight:600;margin-left:1px;}
+.nav-links{display:flex;gap:4px;}
+.nav-link{background:transparent;border:none;color:var(--slate);font-size:14px;font-weight:500;padding:8px 14px;border-radius:9px;cursor:pointer;transition:all 0.15s;}
+.nav-link:hover{color:var(--navy);background:rgba(0,0,0,0.04);}
+.nav-cta{background:var(--navy);color:#fff;border:none;border-radius:10px;padding:10px 20px;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.2s;}
+.nav-cta:hover{background:var(--navy3);box-shadow:0 4px 20px rgba(11,17,32,0.25);}
 
 /* HERO */
-.hero{max-width:1140px;margin:0 auto;padding:56px 24px 48px;}
-.hero-tag{display:inline-flex;align-items:center;gap:8px;border:1px solid rgba(249,115,22,0.3);background:rgba(249,115,22,0.06);border-radius:100px;padding:5px 14px 5px 8px;font-size:12px;font-weight:600;color:#ea6c08;margin-bottom:22px;}
-.hero-dot{width:6px;height:6px;border-radius:50%;background:#f97316;box-shadow:0 0 10px rgba(249,115,22,0.5);animation:blink 2s infinite;}
-.hero-h1{font-size:clamp(44px,7vw,84px);font-weight:900;line-height:0.93;letter-spacing:-3px;margin-bottom:16px;color:#111;}
-.hero-h1 em{font-style:normal;color:#f97316;}
-.hero-sub{font-size:16px;color:#666;line-height:1.75;max-width:500px;margin-bottom:32px;}
+.hero{background:var(--navy);padding:88px 28px 80px;text-align:center;position:relative;overflow:hidden;}
+.hero-glow{position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse 70% 50% at 50% 0%,rgba(0,194,168,0.15) 0%,transparent 70%);}
+.hero-grid{position:absolute;inset:0;pointer-events:none;opacity:0.04;background-image:linear-gradient(rgba(255,255,255,0.5) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.5) 1px,transparent 1px);background-size:48px 48px;}
+.hero-eye{display:inline-flex;align-items:center;gap:8px;background:rgba(0,194,168,0.12);border:1px solid rgba(0,194,168,0.25);border-radius:100px;padding:6px 16px;font-size:12px;font-weight:600;color:var(--teal);letter-spacing:0.5px;margin-bottom:28px;position:relative;}
+.eye-dot{width:6px;height:6px;border-radius:50%;background:var(--teal);animation:pulse 2s infinite;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.4;}}
+.hero-h1{font-family:var(--serif);font-size:clamp(38px,6vw,76px);font-weight:400;line-height:1.05;letter-spacing:-1px;color:#fff;margin-bottom:22px;max-width:760px;margin-left:auto;margin-right:auto;position:relative;}
+.hero-em{font-style:italic;color:var(--teal);}
+.hero-sub{font-size:17px;color:rgba(255,255,255,0.55);max-width:500px;margin:0 auto 44px;line-height:1.75;position:relative;}
+.hero-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-bottom:52px;position:relative;}
+.btn-primary{background:var(--teal);color:var(--navy);border:none;border-radius:12px;padding:14px 26px;font-size:15px;font-weight:700;cursor:pointer;transition:all 0.2s;display:flex;align-items:center;gap:8px;}
+.btn-primary:hover{background:var(--teal2);transform:translateY(-1px);box-shadow:0 8px 28px rgba(0,194,168,0.4);}
+.btn-ghost{background:rgba(255,255,255,0.07);color:rgba(255,255,255,0.8);border:1px solid rgba(255,255,255,0.15);border-radius:12px;padding:14px 26px;font-size:15px;font-weight:500;cursor:pointer;transition:all 0.2s;}
+.btn-ghost:hover{background:rgba(255,255,255,0.12);}
+.hero-proof{display:flex;gap:24px;justify-content:center;flex-wrap:wrap;position:relative;}
+.proof-item{display:flex;align-items:center;gap:7px;font-size:13px;color:rgba(255,255,255,0.45);}
+.proof-check{color:var(--teal);font-size:12px;}
 
-/* CATEGORY SWITCHER */
-.cat-switcher{display:flex;gap:8px;margin-bottom:32px;flex-wrap:wrap;}
-.cat-btn{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #e5e5e5;border-radius:12px;padding:10px 18px;cursor:pointer;transition:all 0.2s;font-family:inherit;box-shadow:0 1px 3px rgba(0,0,0,0.05);}
-.cat-btn:hover{border-color:#ccc;background:#fafafa;}
-.cat-btn.on{background:#fff;border-color:#ccc;box-shadow:0 2px 8px rgba(0,0,0,0.1);}
-.cat-icon{font-size:18px;}
-.cat-label{font-size:13px;font-weight:700;color:#111;}
-.cat-count{font-size:11px;font-weight:700;padding:2px 7px;border-radius:100px;}
-.cat-coming{font-size:10px;font-weight:600;color:#bbb;background:#f5f5f5;border:1px solid #eee;border-radius:4px;padding:2px 6px;letter-spacing:0.5px;}
+/* MAKES */
+.makes{background:var(--warm);border-bottom:1px solid var(--border);padding:14px 28px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;}
+.makes-label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:1.2px;margin-right:6px;}
+.make-pill{font-size:12px;font-weight:600;color:var(--slate);background:#fff;border:1px solid var(--border);border-radius:6px;padding:4px 12px;}
+.make-pill.hl{border-color:rgba(0,194,168,0.4);color:var(--teal2);background:rgba(0,194,168,0.07);}
 
-/* AI BOX */
-.ai-box{background:#fff;border:1px solid #e5e5e5;border-radius:16px;padding:22px;margin-bottom:40px;position:relative;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.05);}
-.ai-box::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,#f97316 30%,#6366f1 70%,transparent);}
-.ai-lbl{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:#f97316;letter-spacing:0.3px;margin-bottom:12px;}
-.ai-ldot{width:6px;height:6px;border-radius:50%;background:#f97316;box-shadow:0 0 8px rgba(249,115,22,0.5);animation:blink 1.5s infinite;}
-.ai-ta{width:100%;background:transparent;border:none;outline:none;color:#111;font-family:inherit;font-size:15px;line-height:1.7;resize:none;min-height:52px;}
-.ai-ta::placeholder{color:#bbb;}
-.ai-foot{display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding-top:12px;border-top:1px solid #f0f0f0;flex-wrap:wrap;gap:8px;}
-.ai-chips{display:flex;gap:6px;flex-wrap:wrap;}
-.ai-chip{background:#f5f5f5;border:1px solid #e8e8e8;color:#888;font-family:inherit;font-size:11px;font-weight:600;padding:4px 11px;border-radius:100px;cursor:pointer;transition:all 0.15s;}
-.ai-chip:hover{color:#f97316;border-color:rgba(249,115,22,0.3);background:#fff8f5;}
-.ai-go{background:linear-gradient(135deg,#f97316,#ef4444);color:#fff;border:none;border-radius:9px;padding:10px 18px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;transition:all 0.15s;display:flex;align-items:center;gap:6px;}
-.ai-go:hover:not(:disabled){opacity:0.9;transform:scale(1.02);}
-.ai-go:disabled{opacity:0.3;cursor:not-allowed;}
-.ai-result{margin-top:16px;padding-top:16px;border-top:1px solid #f0f0f0;animation:fadein 0.3s ease;}
-@keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
-.ai-msg{font-size:14px;color:#888;font-style:italic;line-height:1.7;margin-bottom:10px;}
-.ai-tags{display:flex;flex-wrap:wrap;gap:6px;}
-.ai-tag{display:inline-flex;align-items:center;gap:5px;background:rgba(99,102,241,0.07);border:1px solid rgba(99,102,241,0.2);color:#6366f1;border-radius:100px;padding:5px 12px;font-size:12px;font-weight:700;cursor:pointer;transition:all 0.15s;}
-.ai-tag:hover{background:rgba(99,102,241,0.14);}
-.typing{display:flex;gap:4px;align-items:center;}
-.td{width:6px;height:6px;border-radius:50%;background:#f97316;animation:tb 1.2s infinite;}
-.td:nth-child(2){animation-delay:0.2s;}.td:nth-child(3){animation-delay:0.4s;}
-@keyframes tb{0%,60%,100%{transform:translateY(0);opacity:0.3}30%{transform:translateY(-6px);opacity:1}}
+/* SECTIONS */
+.section{padding:88px 28px;}
+.section.alt{background:var(--warm);}
+.section.dark{background:var(--navy);}
+.inner{max-width:1060px;margin:0 auto;}
+.sec-label{font-size:11px;font-weight:700;color:var(--teal2);letter-spacing:2px;text-transform:uppercase;margin-bottom:12px;}
+.sec-label.lt{color:rgba(0,194,168,0.6);}
+.sec-h{font-family:var(--serif);font-size:clamp(30px,4vw,50px);font-weight:400;line-height:1.1;letter-spacing:-0.5px;margin-bottom:14px;}
+.sec-h.lt{color:#fff;}
+.sec-sub{font-size:16px;color:var(--slate);line-height:1.75;max-width:520px;margin-bottom:52px;}
+.sec-sub.lt{color:rgba(255,255,255,0.5);}
 
-/* STATS */
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;max-width:1140px;margin:0 auto 32px;padding:0 24px;}
-.stat{background:#fff;border:1px solid #e5e5e5;border-radius:13px;padding:18px 20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);}
-.stat-n{font-size:30px;font-weight:900;line-height:1;letter-spacing:-1px;margin-bottom:4px;}
-.stat-l{font-size:12px;color:#888;}
+/* HOW IT WORKS */
+.steps-row{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;}
+.step-card{background:#fff;border:1px solid var(--border);border-radius:14px;padding:28px;transition:all 0.2s;}
+.step-card:hover{border-color:rgba(0,194,168,0.3);box-shadow:0 4px 24px rgba(0,0,0,0.06);transform:translateY(-2px);}
+.step-n{width:36px;height:36px;border-radius:10px;background:var(--navy);color:#fff;font-size:13px;font-weight:800;display:flex;align-items:center;justify-content:center;margin-bottom:18px;}
+.step-icon{font-size:26px;margin-bottom:12px;}
+.step-title{font-family:var(--serif);font-size:20px;font-weight:400;margin-bottom:8px;}
+.step-desc{font-size:13px;color:var(--slate);line-height:1.7;}
 
-/* AUTO VIN SCANNER */
-.vin-section{max-width:1140px;margin:0 auto 32px;padding:0 24px;}
-.vin-box{background:#fff;border:1px solid rgba(220,38,38,0.2);border-radius:16px;padding:24px;position:relative;overflow:hidden;box-shadow:0 2px 10px rgba(220,38,38,0.07);}
-.vin-box::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#dc2626,#f97316,#dc2626);}
-.vin-title{font-size:16px;font-weight:800;margin-bottom:4px;display:flex;align-items:center;gap:8px;color:#111;}
-.vin-sub{font-size:13px;color:#888;margin-bottom:18px;line-height:1.6;}
-.vin-tabs{display:flex;gap:6px;margin-bottom:16px;}
-.vtab{background:transparent;border:1px solid #e5e5e5;color:#888;font-family:inherit;font-size:12px;font-weight:700;padding:6px 14px;border-radius:8px;cursor:pointer;transition:all 0.15s;}
-.vtab:hover{border-color:#ccc;color:#444;}
-.vtab.on{background:rgba(220,38,38,0.07);border-color:rgba(220,38,38,0.3);color:#ef4444;}
-.vin-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;}
-.vin-in{flex:1;min-width:220px;background:#f8f8f8;border:1.5px solid #e5e5e5;border-radius:10px;color:#111;font-family:'Bricolage Grotesque',sans-serif;font-size:20px;font-weight:800;letter-spacing:4px;padding:12px 16px;outline:none;transition:all 0.2s;text-transform:uppercase;}
-.vin-in::placeholder{color:#ccc;letter-spacing:2px;}
-.vin-in:focus{border-color:#dc2626;background:#fff;}
-.vin-ct{font-size:11px;margin-top:4px;}
-.vin-ct.ok{color:#16a34a;}.vin-ct.bad{color:#aaa;}
-.man-row{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;flex:1;}
-.fsel{background:#f8f8f8;border:1.5px solid #e5e5e5;border-radius:10px;color:#111;font-family:inherit;font-size:14px;padding:11px 12px;outline:none;transition:border-color 0.2s;cursor:pointer;min-width:110px;flex:1;}
-.fsel:focus{border-color:#dc2626;background:#fff;}
-.scan-btn{padding:13px 22px;background:linear-gradient(135deg,#dc2626,#991b1b);color:#fff;border:none;border-radius:10px;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;transition:all 0.15s;white-space:nowrap;display:flex;align-items:center;gap:7px;box-shadow:0 4px 20px rgba(220,38,38,0.2);}
-.scan-btn:hover:not(:disabled){opacity:0.9;transform:scale(1.02);}
-.scan-btn:disabled{opacity:0.25;cursor:not-allowed;transform:none;}
+/* ISSUES */
+.issues-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;}
+.issue-card{background:#fff;border:1.5px solid var(--border);border-radius:10px;padding:18px;cursor:pointer;transition:all 0.15s;}
+.issue-card:hover{border-color:rgba(0,194,168,0.4);transform:translateY(-1px);}
+.issue-card.sel{border-color:var(--teal);background:rgba(0,194,168,0.05);}
+.ic-icon{font-size:24px;margin-bottom:8px;}
+.ic-name{font-size:13px;font-weight:700;margin-bottom:4px;}
+.ic-desc{font-size:11px;color:var(--slate);line-height:1.5;}
 
-/* SCAN ANIMATION */
-.scan-anim{text-align:center;padding:44px 24px;max-width:1140px;margin:0 auto;}
-.scan-car{font-size:64px;display:inline-block;animation:drive 1s ease-in-out infinite alternate;margin-bottom:16px;}
-@keyframes drive{from{transform:translateX(-20px)}to{transform:translateX(20px)}}
-.scan-title{font-size:22px;font-weight:800;letter-spacing:-0.5px;margin-bottom:6px;color:#111;}
-.scan-sub{font-size:14px;color:#888;margin-bottom:22px;}
-.scan-track{width:300px;height:3px;background:#eee;border-radius:99px;overflow:hidden;margin:0 auto 20px;}
-.scan-fill{height:100%;background:linear-gradient(90deg,#dc2626,#f97316);border-radius:99px;transition:width 0.5s ease;}
-.scan-steps{display:flex;flex-direction:column;gap:7px;max-width:340px;margin:0 auto;text-align:left;}
-.ss{display:flex;align-items:center;gap:9px;font-size:13px;}
-.ss.done{color:#16a34a;}.ss.act{color:#111;}.ss.wait{color:#ccc;}
-.ss-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
-.ss-spin{width:13px;height:13px;border:2px solid #dc2626;border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;flex-shrink:0;}
-@keyframes spin{to{transform:rotate(360deg)}}
+/* TRUST */
+.trust-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;}
+.trust-stat{background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:28px 20px;text-align:center;}
+.ts-n{font-family:var(--serif);font-size:42px;color:var(--teal);letter-spacing:-1px;line-height:1;margin-bottom:6px;}
+.ts-l{font-size:12px;color:rgba(255,255,255,0.45);line-height:1.5;}
 
-/* NHTSA RESULTS */
-.nhtsa-results{max-width:1140px;margin:0 auto;padding:0 24px 24px;}
-.vehicle-bar{background:#fff;border:1px solid #e5e5e5;border-radius:13px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;box-shadow:0 1px 4px rgba(0,0,0,0.05);}
-.vb-info{display:flex;align-items:center;gap:12px;}
-.vb-name{font-size:17px;font-weight:800;letter-spacing:-0.3px;color:#111;}
-.vb-detail{font-size:12px;color:#888;margin-top:2px;}
-.vb-stats{display:flex;gap:10px;flex-wrap:wrap;}
-.vbs{background:#f8f8f8;border:1px solid #e5e5e5;border-radius:9px;padding:9px 14px;text-align:center;}
-.vbs-n{font-size:20px;font-weight:900;letter-spacing:-0.5px;line-height:1;}
-.vbs-l{font-size:9px;color:#888;text-transform:uppercase;letter-spacing:1px;margin-top:2px;}
-.match-banner{background:rgba(220,38,38,0.04);border:1px solid rgba(220,38,38,0.15);border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
-.mb-title{font-size:14px;font-weight:700;color:#dc2626;margin-bottom:2px;}
-.mb-sub{font-size:13px;color:#888;}
-.mb-val{margin-left:auto;flex-shrink:0;text-align:right;}
-.mb-num{font-size:28px;font-weight:900;color:#dc2626;letter-spacing:-1px;line-height:1;}
-.mb-lbl{font-size:10px;color:#888;text-transform:uppercase;letter-spacing:1px;}
-.nhtsa-sec-head{font-size:13px;font-weight:800;letter-spacing:0.5px;text-transform:uppercase;color:#aaa;margin:16px 0 10px;display:flex;align-items:center;gap:10px;}
-.nhtsa-sec-head::after{content:'';flex:1;height:1px;background:#e5e5e5;}
-.recall-item{background:#fff;border:1px solid #e5e5e5;border-radius:12px;overflow:hidden;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,0.04);}
-.ri-accent{height:2px;}
-.ri-body{padding:14px 16px;}
-.ri-top{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;}
-.sev-pill{font-size:9px;font-weight:800;padding:2px 8px;border-radius:100px;letter-spacing:1px;}
-.comp-pill{font-size:10px;color:#888;background:#f5f5f5;border:1px solid #e5e5e5;border-radius:4px;padding:2px 7px;}
-.ri-summary{font-size:13px;color:#555;line-height:1.6;margin-bottom:8px;}
-.ri-risk{font-size:12px;color:#666;padding:8px 11px;background:#fff8f8;border-radius:8px;border-left:2px solid #dc2626;margin-bottom:10px;line-height:1.5;}
-.ri-settlements{border-top:1px solid #f0f0f0;padding-top:10px;margin-top:2px;}
-.ris-label{font-size:10px;font-weight:700;color:#dc2626;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:7px;}
-.smr{display:flex;align-items:center;justify-content:space-between;background:rgba(220,38,38,0.03);border:1px solid rgba(220,38,38,0.1);border-radius:8px;padding:9px 13px;cursor:pointer;transition:all 0.15s;margin-bottom:5px;}
-.smr:hover{background:rgba(220,38,38,0.07);border-color:rgba(220,38,38,0.2);}
-.smr-title{font-size:13px;font-weight:700;margin-bottom:2px;color:#111;}
-.smr-pay{font-size:12px;color:#16a34a;font-weight:600;}
-.smr-cta{background:transparent;border:1px solid rgba(220,38,38,0.25);color:#dc2626;font-family:inherit;font-size:12px;font-weight:700;padding:5px 12px;border-radius:7px;cursor:pointer;flex-shrink:0;}
-.no-smr{font-size:12px;color:#bbb;font-style:italic;}
-.nhtsa-error{background:#fff3f3;border:1px solid #fecaca;border-radius:10px;padding:14px 16px;font-size:13px;color:#dc2626;margin-bottom:14px;}
+/* TESTIMONIALS */
+.testi-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;}
+.testi{background:var(--warm);border:1px solid var(--border);border-radius:14px;padding:26px;}
+.testi-quote{font-size:14px;color:var(--slate);line-height:1.75;margin-bottom:18px;font-style:italic;}
+.testi-name{font-size:14px;font-weight:700;}
+.testi-detail{font-size:12px;color:var(--muted);margin-top:3px;}
 
-/* BROWSE */
-.browse{max-width:1140px;margin:0 auto;padding:0 24px 80px;}
-.sec-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px;}
-.sec-title{font-size:20px;font-weight:800;letter-spacing:-0.5px;color:#111;}
-.filter-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;}
-.fpill{background:transparent;border:1px solid #e5e5e5;color:#888;font-family:inherit;font-size:12px;font-weight:600;padding:5px 14px;border-radius:100px;cursor:pointer;transition:all 0.15s;}
-.fpill:hover{color:#444;border-color:#bbb;}
-.fpill.on{background:#111;border-color:#111;color:#fff;}
-.search-wrap{position:relative;margin-bottom:18px;}
-.search-icon{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:#bbb;pointer-events:none;}
-.search-in{width:100%;background:#fff;border:1px solid #e5e5e5;border-radius:10px;color:#111;font-family:inherit;font-size:14px;padding:11px 14px 11px 38px;outline:none;transition:border-color 0.2s;box-shadow:0 1px 3px rgba(0,0,0,0.05);}
-.search-in:focus{border-color:rgba(249,115,22,0.5);}
-.search-in::placeholder{color:#bbb;}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;}
-
-/* CARDS */
-.card{background:#fff;border:1px solid #e5e5e5;border-radius:14px;padding:18px;cursor:pointer;transition:all 0.2s;position:relative;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,0.05);}
-.card:hover{border-color:#ccc;transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,0.1);}
-.card.hl{border-color:rgba(99,102,241,0.4);background:rgba(99,102,241,0.02);}
-.card.sv{border-color:rgba(22,163,74,0.3);}
-.card-cat-tag{position:absolute;top:0;left:0;right:0;height:2px;}
-.urgent-ribbon{position:absolute;top:10px;right:-26px;background:#ef4444;color:#fff;font-size:8px;font-weight:800;letter-spacing:1.5px;padding:3px 32px;transform:rotate(45deg);}
-.card-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:11px;}
-.card-icon{font-size:24px;}
-.cat-badge{font-size:10px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;padding:3px 9px;border-radius:100px;border:1px solid;}
-.card-co{font-size:11px;color:#888;font-weight:600;text-transform:uppercase;letter-spacing:0.3px;margin-bottom:3px;}
-.card-title{font-size:14px;font-weight:700;margin-bottom:8px;line-height:1.35;color:#111;}
-.card-desc{font-size:13px;color:#666;line-height:1.6;margin-bottom:14px;}
-.card-ft{display:flex;justify-content:space-between;align-items:flex-end;}
-.payout-l{font-size:10px;color:#aaa;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:2px;}
-.payout-v{font-size:24px;font-weight:900;color:#16a34a;letter-spacing:-0.8px;line-height:1;}
-.dl{font-size:11px;color:#aaa;text-align:right;}
-.dl span{display:block;color:#888;font-weight:600;margin-top:1px;}
-.card-btns{display:flex;gap:7px;margin-top:12px;}
-.cbtn{flex:1;background:#f8f8f8;border:1px solid #e5e5e5;color:#666;font-family:inherit;font-size:12px;font-weight:700;padding:8px;border-radius:8px;cursor:pointer;transition:all 0.15s;text-align:center;}
-.cbtn:hover{background:#f0f0f0;color:#111;}
-.cbtn.save{color:#16a34a;border-color:rgba(22,163,74,0.22);background:rgba(22,163,74,0.04);}
-.cbtn.save:hover{background:rgba(22,163,74,0.1);}
-.cbtn.saved{background:rgba(22,163,74,0.08);border-color:rgba(22,163,74,0.3);color:#16a34a;}
-
-/* SAVED */
-.saved-page{max-width:1140px;margin:0 auto;padding:48px 24px 80px;}
-.sp-title{font-size:32px;font-weight:900;letter-spacing:-1px;margin-bottom:6px;color:#111;}
-.sp-sub{font-size:15px;color:#888;margin-bottom:28px;}
-.pot-bar{background:linear-gradient(135deg,rgba(249,115,22,0.06),rgba(99,102,241,0.04));border:1px solid rgba(249,115,22,0.15);border-radius:14px;padding:24px;margin-bottom:28px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;}
-.pot-val{font-size:44px;font-weight:900;color:#16a34a;letter-spacing:-2px;line-height:1;}
-.pot-share{background:#f97316;color:#fff;border:none;border-radius:10px;padding:10px 18px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;transition:all 0.15s;}
-.pot-share:hover{background:#ea6c08;}
-.empty{text-align:center;padding:70px 20px;color:#bbb;}
-.empty-icon{font-size:48px;margin-bottom:12px;}
-.empty-title{font-size:20px;font-weight:800;color:#aaa;margin-bottom:6px;}
-.empty-sub{font-size:14px;line-height:1.7;max-width:320px;margin:0 auto 20px;color:#bbb;}
-.btn-p{background:#f97316;color:#fff;border:none;border-radius:10px;padding:13px 22px;font-family:inherit;font-size:14px;font-weight:700;cursor:pointer;transition:all 0.15s;}
-.btn-p:hover{background:#ea6c08;}
+/* FAQ */
+.faqs{max-width:660px;margin:0 auto;}
+.faq{border:1px solid var(--border);border-radius:10px;margin-bottom:8px;overflow:hidden;transition:border-color 0.15s;}
+.faq:hover{border-color:#CBD5E1;}
+.faq-q{width:100%;background:transparent;border:none;padding:18px 20px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;font-size:14px;font-weight:600;color:var(--navy);text-align:left;gap:12px;}
+.faq-q:hover{background:var(--warm);}
+.faq-chev{font-size:11px;color:var(--muted);transition:transform 0.2s;flex-shrink:0;}
+.faq-chev.open{transform:rotate(180deg);}
+.faq-a{padding:0 20px 16px;font-size:13px;color:var(--slate);line-height:1.8;}
 
 /* MODAL */
-.overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);backdrop-filter:blur(6px);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;animation:fadein 0.2s ease;}
-.modal{background:#fff;border:1px solid #e5e5e5;border-radius:18px;max-width:560px;width:100%;max-height:88vh;overflow-y:auto;position:relative;animation:mIn 0.25s cubic-bezier(0.34,1.56,0.64,1);box-shadow:0 20px 60px rgba(0,0,0,0.15);}
-@keyframes mIn{from{opacity:0;transform:scale(0.93) translateY(16px)}to{opacity:1;transform:scale(1) translateY(0)}}
-.modal-stripe{height:3px;border-radius:18px 18px 0 0;}
-.mclose{position:absolute;top:14px;right:14px;background:#f5f5f5;border:none;color:#888;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:14px;transition:all 0.15s;z-index:10;}
-.mclose:hover{background:#eee;color:#111;}
-.mbody{padding:24px;}
-.mtabs{display:flex;border-bottom:1px solid #e5e5e5;margin:-24px -24px 20px;padding:0 24px;}
-.mtab{background:transparent;border:none;border-bottom:2px solid transparent;color:#888;font-family:inherit;font-size:13px;font-weight:600;padding:13px 14px;cursor:pointer;transition:all 0.15s;margin-bottom:-1px;}
-.mtab:hover{color:#111;}
-.mtab.on{color:#f97316;border-bottom-color:#f97316;}
-.m-icon{font-size:38px;margin-bottom:10px;}
-.m-co{font-size:11px;color:#888;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;}
-.m-title{font-size:20px;font-weight:800;margin-bottom:8px;line-height:1.2;letter-spacing:-0.3px;color:#111;}
-.m-desc{font-size:14px;color:#666;line-height:1.7;margin-bottom:18px;}
-.m-meta{display:flex;gap:9px;margin-bottom:22px;}
-.mtile{flex:1;background:#f8f8f8;border:1px solid #e5e5e5;border-radius:10px;padding:12px;}
-.mtile-l{font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;}
-.mtile-v{font-size:20px;font-weight:900;line-height:1;letter-spacing:-0.5px;color:#111;}
-.q-head{font-size:10px;font-weight:700;color:#aaa;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:14px;}
-.qi{margin-bottom:14px;}
-.qt{font-size:14px;color:#333;line-height:1.6;margin-bottom:9px;font-weight:500;}
-.qr{font-size:10px;color:#f97316;margin-left:5px;font-weight:800;}
-.qbtns{display:flex;gap:7px;}
-.qbtn{flex:1;padding:10px;border-radius:9px;border:1.5px solid #e5e5e5;background:#f8f8f8;color:#888;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;transition:all 0.15s;}
-.qbtn:hover{border-color:#ccc;color:#444;}
-.qbtn.y.sel{background:rgba(22,163,74,0.08);border-color:#16a34a;color:#16a34a;}
-.qbtn.n.sel{background:rgba(244,63,94,0.07);border-color:#f43f5e;color:#f43f5e;}
-.chk-btn{width:100%;padding:14px;background:linear-gradient(135deg,#f97316,#ef4444);color:#fff;border:none;border-radius:11px;font-family:inherit;font-size:15px;font-weight:800;cursor:pointer;transition:all 0.2s;margin-top:18px;}
-.chk-btn:disabled{opacity:0.2;cursor:not-allowed;}
-.chk-btn:not(:disabled):hover{opacity:0.9;transform:scale(1.01);}
-.r-yes{margin-top:16px;background:rgba(22,163,74,0.05);border:1.5px solid rgba(22,163,74,0.25);border-radius:14px;padding:24px;text-align:center;animation:fadein 0.3s ease;}
-.r-no{margin-top:16px;background:#fff5f5;border:1.5px solid rgba(244,63,94,0.18);border-radius:14px;padding:24px;text-align:center;animation:fadein 0.3s ease;}
-.r-emoji{font-size:38px;margin-bottom:10px;}
-.r-title{font-size:20px;font-weight:900;margin-bottom:5px;}
-.r-payout{font-size:50px;font-weight:900;color:#16a34a;line-height:1;letter-spacing:-2px;margin:6px 0;}
-.r-sub{font-size:13px;color:#666;line-height:1.7;margin-bottom:12px;}
-.r-cta{width:100%;padding:13px;background:#16a34a;color:#fff;border:none;border-radius:10px;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;transition:all 0.15s;}
-.r-cta:hover{background:#15803d;}
-.firm-box{background:#fff8f5;border:1px solid rgba(249,115,22,0.18);border-radius:12px;padding:18px;margin-bottom:12px;}
-.firm-name{font-size:14px;font-weight:800;margin-bottom:3px;color:#111;}
-.firm-sub{font-size:13px;color:#666;margin-bottom:12px;line-height:1.6;}
-.no-fee-pill{display:inline-flex;align-items:center;gap:5px;background:rgba(22,163,74,0.07);border:1px solid rgba(22,163,74,0.2);border-radius:100px;padding:4px 11px;font-size:11px;color:#16a34a;font-weight:700;margin-bottom:12px;}
-.linput{width:100%;background:#f8f8f8;border:1px solid #e5e5e5;border-radius:9px;color:#111;font-family:inherit;font-size:13px;padding:10px 12px;outline:none;margin-top:4px;}
-.linput:focus{border-color:rgba(249,115,22,0.5);background:#fff;}
-.llabel{font-size:11px;font-weight:700;color:#888;}
-.lfield{margin-bottom:11px;}
-.disc{max-width:1140px;margin:0 auto;text-align:center;font-size:12px;color:#bbb;padding:20px 24px 48px;line-height:2;}
-@media(max-width:700px){
-.stats{grid-template-columns:repeat(2,1fr);}
-.grid{grid-template-columns:1fr;}
-.nav-center{display:none;}
-.cat-switcher{gap:6px;}
-.cat-btn{padding:8px 12px;}
-.man-row{flex-direction:column;}
+.overlay{position:fixed;inset:0;background:rgba(11,17,32,0.75);backdrop-filter:blur(10px);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;animation:ov 0.2s ease;}
+@keyframes ov{from{opacity:0;}to{opacity:1;}}
+.modal{background:#fff;border-radius:22px;max-width:580px;width:100%;max-height:90vh;overflow-y:auto;position:relative;animation:mo 0.28s cubic-bezier(0.34,1.56,0.64,1);box-shadow:0 12px 48px rgba(0,0,0,0.1);}
+@keyframes mo{from{opacity:0;transform:scale(0.94) translateY(16px);}to{opacity:1;transform:scale(1) translateY(0);}}
+.modal::-webkit-scrollbar{display:none;}
+.m-close{position:absolute;top:14px;right:14px;z-index:10;background:rgba(0,0,0,0.06);border:none;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:13px;color:var(--slate);transition:all 0.15s;}
+.m-close:hover{background:rgba(0,0,0,0.12);color:var(--navy);}
+.m-progress{padding:22px 26px 0;}
+.mp-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
+.mp-label{font-size:12px;font-weight:600;color:var(--slate);}
+.mp-pct{font-size:12px;font-weight:700;color:var(--teal2);}
+.mp-track{height:3px;background:#E2E8F0;border-radius:99px;overflow:hidden;}
+.mp-fill{height:100%;background:linear-gradient(90deg,var(--teal),var(--teal2));border-radius:99px;transition:width 0.4s ease;}
+.s-tabs{display:flex;gap:4px;margin-top:10px;}
+.s-tab{flex:1;height:3px;background:#E2E8F0;border-radius:99px;transition:background 0.3s;}
+.s-tab.done{background:var(--teal);}
+.s-tab.cur{background:rgba(0,194,168,0.4);}
+.m-body{padding:24px 26px 26px;}
+.m-tag{display:inline-block;background:rgba(0,194,168,0.1);border:1px solid rgba(0,194,168,0.2);color:var(--teal2);font-size:10px;font-weight:700;padding:3px 10px;border-radius:100px;letter-spacing:0.5px;margin-bottom:10px;}
+.m-h{font-family:var(--serif);font-size:24px;font-weight:400;line-height:1.2;margin-bottom:5px;letter-spacing:-0.3px;}
+.m-sub{font-size:13px;color:var(--slate);line-height:1.6;margin-bottom:20px;}
+.field{margin-bottom:16px;}
+.f-label{font-size:12px;font-weight:600;color:var(--navy3);margin-bottom:6px;display:flex;align-items:center;gap:6px;}
+.f-opt{font-weight:400;color:var(--muted);font-size:11px;}
+.f-input,.f-select,.f-ta{width:100%;background:var(--warm);border:1.5px solid #E2E8F0;border-radius:10px;color:var(--navy);font-size:14px;padding:11px 14px;outline:none;transition:all 0.15s;}
+.f-input:focus,.f-select:focus,.f-ta:focus{border-color:var(--teal);background:#fff;box-shadow:0 0 0 3px rgba(0,194,168,0.1);}
+.f-ta{resize:none;line-height:1.6;min-height:88px;}
+.f-hint{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.5;}
+.f-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.chips{display:flex;flex-wrap:wrap;gap:7px;}
+.chip{background:var(--warm);border:1.5px solid #E2E8F0;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:500;color:var(--navy);cursor:pointer;transition:all 0.15s;}
+.chip:hover{border-color:#CBD5E1;}
+.chip.on{background:rgba(0,194,168,0.08);border-color:var(--teal);color:var(--teal2);font-weight:700;}
+.upload-zone{border:2px dashed #CBD5E1;border-radius:10px;padding:28px;text-align:center;background:var(--warm);cursor:pointer;transition:all 0.2s;margin-bottom:10px;}
+.upload-zone:hover,.upload-zone.drag{border-color:var(--teal);background:rgba(0,194,168,0.04);}
+.uz-icon{font-size:28px;margin-bottom:8px;}
+.uz-title{font-size:14px;font-weight:700;margin-bottom:3px;}
+.uz-sub{font-size:12px;color:var(--slate);}
+.uz-tags{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;margin-top:10px;}
+.uz-tag{background:#fff;border:1px solid var(--border);border-radius:5px;font-size:10px;font-weight:600;color:var(--slate);padding:2px 8px;}
+.uploaded{display:flex;align-items:center;gap:10px;background:rgba(0,194,168,0.07);border:1px solid rgba(0,194,168,0.22);border-radius:9px;padding:10px 14px;margin-bottom:7px;}
+.uf-name{font-size:12px;font-weight:600;flex:1;color:var(--navy);}
+.uf-ok{color:var(--teal);font-size:14px;font-weight:700;}
+.m-nav{display:flex;gap:10px;margin-top:22px;padding-top:18px;border-top:1px solid #F1F5F9;}
+.btn-next{flex:1;background:var(--navy);color:#fff;border:none;border-radius:11px;padding:13px;font-size:14px;font-weight:700;cursor:pointer;transition:all 0.15s;}
+.btn-next:hover{background:var(--navy3);}
+.btn-next:disabled{opacity:0.3;cursor:not-allowed;}
+.btn-back{background:var(--warm);border:1.5px solid #E2E8F0;color:var(--slate);border-radius:11px;padding:13px 20px;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.15s;}
+.btn-back:hover{border-color:#CBD5E1;color:var(--navy);}
+.trust-badge{display:flex;align-items:flex-start;gap:9px;background:var(--warm);border-radius:9px;padding:11px 14px;margin-top:12px;}
+.tb-text{font-size:12px;color:var(--slate);line-height:1.55;}
+.recall-item{border-left:3px solid;border-radius:0 9px 9px 0;background:var(--warm);padding:12px 14px;margin-bottom:8px;}
+.ri-top{display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;}
+.ri-badge{font-size:9px;font-weight:800;padding:2px 7px;border-radius:100px;letter-spacing:1px;}
+.ri-summary{font-size:12px;color:var(--slate);line-height:1.6;}
+.scan-wrap{text-align:center;padding:36px 20px;}
+.scan-car{font-size:52px;animation:scan 1s ease-in-out infinite alternate;display:inline-block;margin-bottom:14px;}
+@keyframes scan{from{transform:translateX(-16px);}to{transform:translateX(16px);}}
+.scan-title{font-size:18px;font-weight:700;margin-bottom:5px;}
+.scan-sub{font-size:13px;color:var(--slate);margin-bottom:20px;}
+.scan-track{width:260px;height:3px;background:#E2E8F0;border-radius:99px;overflow:hidden;margin:0 auto 16px;}
+.scan-bar{height:100%;background:linear-gradient(90deg,var(--teal),var(--teal2));border-radius:99px;transition:width 0.5s ease;}
+.scan-steps{display:flex;flex-direction:column;gap:6px;max-width:300px;margin:0 auto;text-align:left;}
+.ss{display:flex;align-items:center;gap:8px;font-size:12px;}
+.ss.done{color:var(--teal2);}
+.ss.act{color:var(--navy);}
+.ss.wait{color:#CBD5E1;}
+.ss-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+.ss-spin{width:12px;height:12px;border:2px solid var(--teal);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;flex-shrink:0;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.success{text-align:center;padding:36px 24px;}
+.s-icon{font-size:52px;margin-bottom:14px;}
+.s-h{font-family:var(--serif);font-size:28px;margin-bottom:8px;}
+.s-sub{font-size:14px;color:var(--slate);line-height:1.7;margin-bottom:22px;max-width:380px;margin-left:auto;margin-right:auto;}
+.s-next{background:var(--warm);border-radius:12px;padding:16px;text-align:left;}
+.sn-title{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1.2px;margin-bottom:10px;}
+.sn-item{display:flex;align-items:flex-start;gap:9px;font-size:13px;color:var(--navy);margin-bottom:7px;line-height:1.5;}
+.sn-dot{width:6px;height:6px;border-radius:50%;background:var(--teal);flex-shrink:0;margin-top:4px;}
+.disc{background:var(--warm);border-top:1px solid var(--border);padding:28px;text-align:center;}
+.disc p{font-size:11px;color:var(--muted);line-height:1.8;max-width:680px;margin:0 auto;}
+.footer{background:var(--navy);padding:44px 28px;}
+.footer-inner{max-width:1060px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px;}
+.footer-brand{font-family:var(--serif);font-size:18px;color:#fff;}
+.footer-links{display:flex;gap:20px;}
+.footer-link{font-size:12px;color:rgba(255,255,255,0.35);cursor:pointer;transition:color 0.15s;}
+.footer-link:hover{color:rgba(255,255,255,0.7);}
+.footer-copy{font-size:11px;color:rgba(255,255,255,0.25);}
+@media(max-width:768px){
+  .steps-row,.testi-grid{grid-template-columns:1fr;}
+  .issues-grid{grid-template-columns:repeat(2,1fr);}
+  .trust-grid{grid-template-columns:repeat(2,1fr);}
+  .f-row{grid-template-columns:1fr;}
+  .nav-links{display:none;}
+  .hero{padding:64px 20px 60px;}
+  .section{padding:60px 20px;}
 }
 `;
 
-// ─── SUBCOMPONENTS ────────────────────────────────────────────────────────────
-function Dots() {
-  return <div className="typing"><div className="td"/><div className="td"/><div className="td"/></div>;
-}
-
-function AIBox({ onMatch }) {
-  const [txt, setTxt] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState(null);
-  const [ids, setIds] = useState([]);
-  const examples = [
-    "I lived in Illinois and used Facebook",
-    "T-Mobile customer, got a breach letter",
-    "My 2015 MacBook keyboard broke",
-    "I own a 2018 Honda CR-V",
-    "VW TDI diesel owner",
-    "Amazon charged me for Prime I didn't want",
-  ];
-
-  const run = async () => {
-    if (!txt.trim()) return;
-    setLoading(true); setMsg(null); setIds([]);
-    try {
-      // Secure proxy — API key lives in Vercel env vars, never exposed client-side
-      const r = await fetch("/api/match", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: txt }),
-      });
-      const parsed = await r.json();
-      setMsg(parsed.summary || "Here's what I found.");
-      setIds(parsed.matchIds || []);
-      onMatch(parsed.matchIds || []);
-    } catch (_) {
-      setMsg("I found some potential matches. Check the highlighted cases below.");
-      onMatch([]);
-    }
-    setLoading(false);
-  };
-
-  return (
-    <div className="ai-box">
-      <div className="ai-lbl"><div className="ai-ldot"/>AI Settlement Finder · Searches Tech + Auto</div>
-      <textarea
-        className="ai-ta" rows={2}
-        placeholder="Describe your situation... e.g. I was a T-Mobile customer, or I own a 2018 Honda CR-V with a 1.5T engine"
-        value={txt}
-        onChange={e => setTxt(e.target.value)}
-        onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) run(); }}
-      />
-      <div className="ai-foot">
-        <div className="ai-chips">
-          {!txt && examples.map(ex => <button key={ex} className="ai-chip" onClick={() => setTxt(ex)}>{ex}</button>)}
-        </div>
-        <button className="ai-go" disabled={!txt.trim() || loading} onClick={run}>
-          {loading ? <Dots/> : <span>Find My Claims →</span>}
-        </button>
-      </div>
-      {(loading || msg) && (
-        <div className="ai-result">
-          {loading && <Dots/>}
-          {msg && <>
-            <div className="ai-msg">"{msg}"</div>
-            {ids.length > 0 ? (
-              <div className="ai-tags">
-                {ids.map(id => {
-                  const s = ALL_SUITS.find(l => l.id === id);
-                  return s ? (
-                    <span key={id} className="ai-tag" onClick={() => document.getElementById("card-" + id)?.scrollIntoView({ behavior: "smooth", block: "center" })}>
-                      {s.icon} {s.company} · {s.ps}
-                    </span>
-                  ) : null;
-                })}
-              </div>
-            ) : <span style={{fontSize:13,color:"#52525b"}}>No strong matches — browse all cases below.</span>}
-          </>}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SuitCard({ s, saved, hl, onSave, onOpen }) {
-  const cat = CATEGORIES.find(c => c.id === s.cat);
-  const color = cat?.color || "#f97316";
-  return (
-    <div id={"card-" + s.id} className={"card" + (hl ? " hl" : "") + (saved ? " sv" : "")} onClick={() => onOpen(s)}>
-      <div className="card-cat-tag" style={{ background: `linear-gradient(90deg,${color},transparent)` }} />
-      {s.urgent && <div className="urgent-ribbon">URGENT</div>}
-      <div className="card-head" style={{ marginTop: 6 }}>
-        <div className="card-icon">{s.icon}</div>
-        <div className="cat-badge" style={{ color, borderColor: color + "44", background: color + "12" }}>{cat?.label}</div>
-      </div>
-      <div className="card-co">{s.company}</div>
-      <div className="card-title">{s.desc.split(".")[0]}.</div>
-      <div className="card-desc">{s.desc}</div>
-      <div className="card-ft">
-        <div><div className="payout-l">Up to</div><div className="payout-v">{s.ps}</div></div>
-        <div className="dl">Deadline<span>{s.deadline}</span></div>
-      </div>
-      <div className="card-btns">
-        <button className="cbtn" onClick={e => { e.stopPropagation(); onOpen(s); }}>Check Eligibility →</button>
-        <button className={"cbtn " + (saved ? "saved" : "save")} onClick={e => { e.stopPropagation(); onSave(s.id); }}>
-          {saved ? "✓ Saved" : "+ Save"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function EligTab({ s, saved, onSave }) {
-  const [ans, setAns] = useState({});
-  const [result, setResult] = useState(null);
-  const allReq = s.qs.filter(q => q.req).every(q => ans[q.id] !== undefined);
-  const check = () => setResult(s.qs.filter(q => q.req).every(q => ans[q.id] === "yes") ? "yes" : "no");
-  return (
-    <div>
-      <div className="q-head">Eligibility Questions</div>
-      {s.qs.map((q, i) => (
-        <div key={q.id} className="qi">
-          <div className="qt"><span style={{ color: "#3f3f46", marginRight: 6 }}>{i + 1}.</span>{q.text}{q.req && <span className="qr">Required</span>}</div>
-          <div className="qbtns">
-            <button className={"qbtn y" + (ans[q.id] === "yes" ? " sel" : "")} onClick={() => setAns(a => ({ ...a, [q.id]: "yes" }))}>✓ Yes</button>
-            <button className={"qbtn n" + (ans[q.id] === "no" ? " sel" : "")} onClick={() => setAns(a => ({ ...a, [q.id]: "no" }))}>✗ No</button>
-          </div>
-        </div>
-      ))}
-      {!result && <button className="chk-btn" disabled={!allReq} onClick={check}>Check My Eligibility</button>}
-      {result === "yes" && (
-        <div className="r-yes">
-          <div className="r-emoji">🎉</div>
-          <div className="r-title" style={{ color: "#22d3a0" }}>You Likely Qualify!</div>
-          <div className="r-payout">{s.ps}</div>
-          <div className="r-sub">Based on your answers, you're potentially eligible. Save this case and connect with attorneys to start your claim.</div>
-          <button className="r-cta" onClick={() => onSave(s.id)}>{saved ? "✓ Saved" : "💾 Save & Start Claim"}</button>
-        </div>
-      )}
-      {result === "no" && (
-        <div className="r-no">
-          <div className="r-emoji">😕</div>
-          <div className="r-title" style={{ color: "#f43f5e" }}>Likely Doesn't Apply</div>
-          <div className="r-sub">You may not meet the core requirements. Browse other open cases — you may qualify for those.</div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function FirmTab({ s }) {
-  const [done, setDone] = useState(false);
-  const [form, setForm] = useState({ name: "", email: "", phone: "" });
-  if (done) return (
-    <div style={{ textAlign: "center", padding: "32px 0" }}>
-      <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
-      <div style={{ fontSize: 19, fontWeight: 800, marginBottom: 7 }}>Request Sent!</div>
-      <div style={{ fontSize: 13, color: "#71717a", lineHeight: 1.7 }}>{s.firm} will contact you within 1 business day.<br />There's no fee unless you win.</div>
-    </div>
-  );
-  return (
-    <div>
-      <div className="no-fee-pill">✓ No fee unless you win</div>
-      <div className="firm-box">
-        <div className="firm-name">{s.firm}</div>
-        <div className="firm-sub">Specialized plaintiff's firm handling this case. Submit your info for a callback within 24 hours.</div>
-        <div style={{ fontSize: 12, color: "#52525b" }}>Firm pays ClaimCheck <strong style={{ color: "#f97316" }}>${s.firmPPL}/lead</strong> for qualified referrals.</div>
-      </div>
-      {[["name","Full Name","Jane Smith"],["email","Email","jane@example.com"],["phone","Phone (optional)","555-000-0000"]].map(([k,l,p]) => (
-        <div key={k} className="lfield">
-          <label className="llabel">{l}</label>
-          <input className="linput" placeholder={p} value={form[k]} onChange={e => setForm(f => ({ ...f, [k]: e.target.value }))} />
-        </div>
-      ))}
-      <button className="r-cta" style={{ marginTop: 8 }} disabled={!form.name || !form.email} onClick={() => setDone(true)}>
-        Connect Me With {s.firm} →
+function FaqItem({ q, a }) {
+const [open, setOpen] = useState(false);
+return (
+<div className="faq">
+<button className="faq-q" onClick={() => setOpen(o => !o)}>
+{q}<span className={"faq-chev" + (open ? " open" : "")}>▼</span>
       </button>
-      <div style={{ fontSize: 11, color: "#3f3f46", textAlign: "center", marginTop: 8 }}>Free consultation · No obligation · Contingency fee only</div>
+{open && <div className="faq-a">{a}</div>}
     </div>
-  );
+);
 }
 
-function SuitModal({ s, onClose, saved, onSave }) {
-  const [tab, setTab] = useState("check");
-  const cat = CATEGORIES.find(c => c.id === s.cat);
-  const color = cat?.color || "#f97316";
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal" onClick={e => e.stopPropagation()}>
-        <div className="modal-stripe" style={{ background: `linear-gradient(90deg,${color},transparent)` }} />
-        <button className="mclose" onClick={onClose}>✕</button>
-        <div className="mbody" style={{ paddingBottom: 0 }}>
-          <div className="m-icon">{s.icon}</div>
-          <div className="m-co">{s.company} · {cat?.label}</div>
-          <div className="m-title">{s.desc.split(".")[0]}.</div>
-          <div className="m-desc">{s.detail || s.desc}</div>
-          <div className="m-meta">
-            <div className="mtile"><div className="mtile-l">Up to</div><div className="mtile-v" style={{ color: "#22d3a0" }}>{s.ps}</div></div>
-            <div className="mtile"><div className="mtile-l">Deadline</div><div className="mtile-v" style={{ fontSize: 15, marginTop: 3 }}>{s.deadline}</div></div>
-            <div className="mtile"><div className="mtile-l">Firm PPL</div><div className="mtile-v" style={{ fontSize: 15, marginTop: 3, color: "#f97316" }}>${s.firmPPL}</div></div>
-          </div>
-        </div>
-        <div className="mtabs">
-          {[["check","✓ Eligibility"],["detail","Details"],["firm","⚖️ Attorney"]].map(([id,lbl]) => (
-            <button key={id} className={"mtab" + (tab === id ? " on" : "")} onClick={() => setTab(id)}>{lbl}</button>
-          ))}
-        </div>
-        <div className="mbody">
-          {tab === "check" && <EligTab s={s} saved={saved} onSave={onSave} />}
-          {tab === "detail" && (
-            <div>
-              <div style={{ fontSize: 14, color: "#71717a", lineHeight: 1.75 }}>{s.detail || s.desc}</div>
-              {s.makes && (
-                <div style={{ marginTop: 16 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#52525b", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Affected Makes</div>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {s.makes.map(m => <span key={m} style={{ background: "#0d0d16", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, fontSize: 12, fontWeight: 600, padding: "3px 10px", color: "#a1a1aa" }}>{m}</span>)}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-          {tab === "firm" && <FirmTab s={s} />}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── VIN SCANNER (auto vertical) ─────────────────────────────────────────────
-function VINScanner({ onSuitOpen }) {
-  const [vinMode, setVinMode] = useState("vin");
-  const [vin, setVin] = useState("");
-  const [make, setMake] = useState("");
-  const [model, setModel] = useState("");
-  const [year, setYear] = useState("");
-  const [models, setModels] = useState([]);
-  const [scanning, setScanning] = useState(false);
-  const [scanStep, setScanStep] = useState(0);
-  const [scanPct, setScanPct] = useState(0);
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState(null);
-
-  const canGo = vinMode === "vin" ? vin.length === 17 : (make && year);
-
-  const fetchModels = useCallback(async (mk, yr) => {
-    if (!mk || !yr) return;
-    try {
-      const r = await fetch(NHTSA_MODELS_URL(mk, yr));
-      const d = await r.json();
-      setModels((d.Results || []).map(m => m.Model_Name).sort());
-    } catch { setModels([]); }
-  }, []);
-
-  const STEPS = ["Connecting to NHTSA database...","Decoding VIN...","Fetching recall records...","Matching to settlements...","Calculating potential..."];
-
-  const scan = async () => {
-    setScanning(true); setScanStep(0); setScanPct(0); setResult(null); setError(null);
-    try {
-      let vInfo = {};
-      let recalls = [];
-
-      if (vinMode === "vin") {
-        setScanStep(1); setScanPct(20);
-        const vd = await (await fetch(NHTSA_VIN_URL(vin))).json();
-        const get = n => (vd.Results||[]).find(r=>r.Variable===n)?.Value||"";
-        vInfo = { year:get("Model Year"), make:get("Make"), model:get("Model"), trim:get("Trim"), engine:get("Engine Displacement (L)"), vin };
-        if (!vInfo.make || vInfo.make === "Not Applicable") throw new Error("VIN not recognized. Please check and try again.");
-
-        setScanStep(2); setScanPct(40);
-        const rd = await (await fetch(NHTSA_RECALL_VIN(vin))).json();
-        recalls = rd.results || [];
-
-        setScanStep(3); setScanPct(60);
-        if (vInfo.make && vInfo.model && vInfo.year) {
-          try {
-            const rd2 = await (await fetch(NHTSA_RECALL_VEH(vInfo.make, vInfo.model, vInfo.year))).json();
-            const existing = new Set(recalls.map(r=>r.NHTSACampaignNumber));
-            (rd2.results||[]).forEach(r=>{ if(!existing.has(r.NHTSACampaignNumber)) recalls.push(r); });
-          } catch {}
-        }
-      } else {
-        setScanStep(1); setScanPct(30);
-        vInfo = { make, model, year, vin: null };
-        setScanStep(2); setScanPct(50);
-        const rd = await (await fetch(NHTSA_RECALL_VEH(make, model||make, year))).json();
-        recalls = rd.results || [];
-        setScanStep(3); setScanPct(70);
-      }
-
-      const recallsTagged = recalls.map(r => ({ ...r, matched: matchRecallToSuits(r) }));
-      const vMake = (vInfo.make||"").toLowerCase();
-      const makeSuits = AUTO_SUITS.filter(s => (s.makes||[]).some(m=>m.toLowerCase()===vMake||vMake.includes(m.toLowerCase())));
-
-      setScanStep(4); setScanPct(90);
-      await new Promise(r=>setTimeout(r,400));
-      setScanPct(100);
-
-      setResult({
-        vehicle: vInfo,
-        recalls: recallsTagged,
-        makeSuits,
-        totalPot: makeSuits.reduce((a,s)=>a+s.payout,0),
-      });
-    } catch(e) {
-      setError(e.message || "Failed to connect to NHTSA. Please try again.");
-    }
-    setScanning(false);
-  };
-
-  return (
-    <div className="vin-section">
-      <div className="vin-box">
-        <div className="vin-title">🔍 VIN Scanner <span style={{fontSize:11,fontWeight:600,color:"#52525b",marginLeft:6}}>Live NHTSA data</span></div>
-        <div className="vin-sub">Enter your VIN for a real-time scan of the federal recall database. We cross-reference every recall against our settlement database to find what you may be owed.</div>
-
-        <div className="vin-tabs">
-          <button className={"vtab" + (vinMode==="vin"?" on":"")} onClick={()=>setVinMode("vin")}>🔑 VIN Number</button>
-          <button className={"vtab" + (vinMode==="manual"?" on":"")} onClick={()=>setVinMode("manual")}>🚗 Make / Year</button>
-        </div>
-
-        {vinMode === "vin" ? (
-          <div className="vin-row">
-            <div style={{flex:1}}>
-              <input className="vin-in" placeholder="1HGCV1F34JA000000" value={vin} maxLength={17}
-                onChange={e=>setVin(e.target.value.replace(/[^A-Za-z0-9]/g,"").toUpperCase())} />
-              <div className={"vin-ct " + (vin.length===17?"ok":"bad")}>
-                {vin.length===17 ? "✓ Valid VIN length" : vin.length+"/17 characters — find on dashboard, door jamb, or insurance card"}
-              </div>
-            </div>
-            <button className="scan-btn" disabled={vin.length!==17||scanning} onClick={scan}>
-              {scanning ? "Scanning..." : "Scan →"}
-            </button>
-          </div>
-        ) : (
-          <div className="vin-row">
-            <div className="man-row">
-              <select className="fsel" value={make} onChange={e=>{setMake(e.target.value);setModel("");if(e.target.value&&year)fetchModels(e.target.value,year);}}>
-                <option value="">Make</option>
-                {MAKES_LIST.map(m=><option key={m}>{m}</option>)}
-              </select>
-              <select className="fsel" value={year} onChange={e=>{setYear(e.target.value);setModel("");if(make&&e.target.value)fetchModels(make,e.target.value);}}>
-                <option value="">Year</option>
-                {YEARS_LIST.map(y=><option key={y}>{y}</option>)}
-              </select>
-              <select className="fsel" value={model} onChange={e=>setModel(e.target.value)} disabled={!models.length}>
-                <option value="">{models.length?"Model (optional)":"Select make+year first"}</option>
-                {models.map(m=><option key={m}>{m}</option>)}
-              </select>
-            </div>
-            <button className="scan-btn" disabled={!canGo||scanning} onClick={scan}>
-              {scanning ? "Scanning..." : "Scan →"}
-            </button>
-          </div>
-        )}
-
-        {error && <div className="nhtsa-error" style={{marginTop:12}}><strong>Error:</strong> {error}</div>}
-      </div>
-
-      {scanning && (
-        <div className="scan-anim">
-          <div className="scan-car">🚗</div>
-          <div className="scan-title">Scanning NHTSA Database...</div>
-          <div className="scan-sub">Pulling live federal recall records · Cross-referencing settlements</div>
-          <div className="scan-track"><div className="scan-fill" style={{width:scanPct+"%"}}/></div>
-          <div className="scan-steps">
-            {STEPS.map((s,i)=>(
-              <div key={i} className={"ss"+(i<scanStep-1?" done":i===scanStep-1?" act":" wait")}>
-                {i<scanStep-1?<div className="ss-dot" style={{background:"#22d3a0"}}/>:i===scanStep-1?<div className="ss-spin"/>:<div className="ss-dot" style={{background:"#1a1a1a"}}/>}
-                {s}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {result && !scanning && (
-        <div className="nhtsa-results">
-          <div className="vehicle-bar">
-            <div className="vb-info">
-              <span style={{fontSize:28}}>🚗</span>
-              <div>
-                <div className="vb-name">{result.vehicle.year} {result.vehicle.make} {result.vehicle.model}{result.vehicle.trim?" "+result.vehicle.trim:""}</div>
-                <div className="vb-detail">{result.vehicle.engine?result.vehicle.engine+"L · ":""}{result.vehicle.vin||"Manual lookup"}</div>
-              </div>
-            </div>
-            <div className="vb-stats">
-              {[
-                {n:result.recalls.length, l:"NHTSA Recalls", c:result.recalls.length>0?"#ef4444":"#22d3a0"},
-                {n:result.makeSuits.length, l:"Settlements", c:result.makeSuits.length>0?"#f97316":"#52525b"},
-                {n:"$"+(result.totalPot/1000).toFixed(0)+"K", l:"Max Potential", c:"#22d3a0"},
-              ].map((v,i)=>(
-                <div key={i} className="vbs">
-                  <div className="vbs-n" style={{color:v.c}}>{v.n}</div>
-                  <div className="vbs-l">{v.l}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {result.makeSuits.length > 0 && (
-            <div className="match-banner">
-              <span style={{fontSize:24,flexShrink:0}}>⚠️</span>
-              <div>
-                <div className="mb-title">Potential Settlement Match — Action Required</div>
-                <div className="mb-sub">Your {result.vehicle.make} may be covered by {result.makeSuits.length} active class action settlement{result.makeSuits.length!==1?"s":""}.</div>
-              </div>
-              <div className="mb-val">
-                <div className="mb-num">${result.totalPot.toLocaleString()}</div>
-                <div className="mb-lbl">Max potential</div>
-              </div>
-            </div>
-          )}
-
-          {result.recalls.length > 0 && (
-            <>
-              <div className="nhtsa-sec-head">Live NHTSA Recalls · {result.recalls.length} found</div>
-              {result.recalls.map((r,i) => {
-                const sev = nhtsaSeverity(r);
-                return (
-                  <div key={i} className="recall-item">
-                    <div className="ri-accent" style={{background:`linear-gradient(90deg,${sev.color},transparent)`}}/>
-                    <div className="ri-body">
-                      <div className="ri-top">
-                        <span className="sev-pill" style={{background:sev.color+"20",color:sev.color,border:"1px solid "+sev.color+"44"}}>{sev.label}</span>
-                        {r.Component && <span className="comp-pill">{r.Component.split(":")[0]}</span>}
-                        <span style={{fontSize:11,color:"#2a2a2a",marginLeft:"auto"}}>{r.NHTSACampaignNumber}</span>
-                      </div>
-                      {r.Summary && <div className="ri-summary">{r.Summary.length>250?r.Summary.substring(0,250)+"...":r.Summary}</div>}
-                      {r.Consequence && <div className="ri-risk"><strong style={{color:"#dc2626",fontSize:10,textTransform:"uppercase",letterSpacing:1}}>Risk: </strong>{r.Consequence}</div>}
-                      {r.matched.length > 0 && (
-                        <div className="ri-settlements">
-                          <div className="ris-label">⚖️ {r.matched.length} Settlement Match{r.matched.length>1?"es":""}</div>
-                          {r.matched.map(s => (
-                            <div key={s.id} className="smr" onClick={()=>onSuitOpen(s)}>
-                              <div><div className="smr-title">{s.company}</div><div className="smr-pay">Up to {s.ps}</div></div>
-                              <button className="smr-cta">Check →</button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </>
-          )}
-
-          {result.recalls.length === 0 && (
-            <div style={{background:"rgba(34,211,160,0.06)",border:"1px solid rgba(34,211,160,0.2)",borderRadius:12,padding:"16px 18px",fontSize:13,color:"#52525b",marginBottom:12}}>
-              ✅ No open NHTSA recalls found for this vehicle. You may still qualify for class action settlements below based on your make and model.
-            </div>
-          )}
-
-          {result.makeSuits.length > 0 && (
-            <>
-              <div className="nhtsa-sec-head">All Settlements for {result.vehicle.make}</div>
-              <div className="grid" style={{marginBottom:0}}>
-                {result.makeSuits.map(s => (
-                  <div key={s.id} className="card" style={{cursor:"pointer"}} onClick={()=>onSuitOpen(s)}>
-                    <div className="card-cat-tag" style={{background:"linear-gradient(90deg,#dc2626,transparent)"}}/>
-                    {s.urgent && <div className="urgent-ribbon">URGENT</div>}
-                    <div className="card-head" style={{marginTop:6}}>
-                      <div className="card-icon">{s.icon}</div>
-                      <div className="cat-badge" style={{color:"#dc2626",borderColor:"#dc262644",background:"#dc262612"}}>Auto</div>
-                    </div>
-                    <div className="card-co">{s.company}</div>
-                    <div className="card-title">{s.desc.split(".")[0]}.</div>
-                    <div className="card-desc">{s.desc}</div>
-                    <div className="card-ft">
-                      <div><div className="payout-l">Up to</div><div className="payout-v">{s.ps}</div></div>
-                      <div className="dl">Deadline<span style={{color:s.urgent?"#f59e0b":"#52525b"}}>{s.deadline}</span></div>
-                    </div>
-                    <div className="card-btns"><button className="cbtn">Check Eligibility →</button></div>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── SAVED PAGE ───────────────────────────────────────────────────────────────
-function SavedPage({ saved, onUnsave, onBrowse, onOpen }) {
-  const list = ALL_SUITS.filter(s => saved.includes(s.id));
-  const total = list.reduce((a, s) => a + s.payout, 0);
-  const [copied, setCopied] = useState(false);
-  return (
-    <div className="saved-page">
-      <div className="sp-title">My Saved Cases</div>
-      <div className="sp-sub">Track your potential claims and connect with attorneys.</div>
-      {list.length > 0 ? (
-        <>
-          <div className="pot-bar">
-            <div>
-              <div style={{fontSize:11,color:"#52525b",fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>Your Total Potential Value</div>
-              <div className="pot-val">${total.toLocaleString()}</div>
-              <div style={{fontSize:13,color:"#52525b",marginTop:5}}>{list.length} case{list.length!==1?"s":""} saved</div>
-            </div>
-            <button className="pot-share" onClick={()=>{setCopied(true);setTimeout(()=>setCopied(false),2500);}}>
-              {copied?"✓ Copied!":"📤 Share Your Number"}
-            </button>
-          </div>
-          <div className="grid">
-            {list.map(s=><SuitCard key={s.id} s={s} saved={true} hl={false} onSave={onUnsave} onOpen={onOpen}/>)}
-          </div>
-        </>
-      ) : (
-        <div className="empty">
-          <div className="empty-icon">📂</div>
-          <div className="empty-title">No saved cases yet</div>
-          <div className="empty-sub">Browse open settlements and save the ones you may qualify for.</div>
-          <button className="btn-p" onClick={onBrowse}>Browse All Cases →</button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [tab, setTab] = useState("home");
-  const [activeCat, setActiveCat] = useState("all");
-  const [search, setSearch] = useState("");
-  const [hl, setHl] = useState([]);
-  const [saved, setSaved] = useState([]);
-  const [active, setActive] = useState(null);
-  const [notif, setNotif] = useState(true);
+const [showModal, setShowModal]   = useState(false);
+const [stepIdx, setStepIdx]       = useState(0);
+const [done, setDone]             = useState(false);
+const [selIssues, setSelIssues]   = useState([]);
+const [heroIssues, setHeroIssues] = useState([]);
+const [files, setFiles]           = useState([]);
+const [drag, setDrag]             = useState(false);
+const [scanning, setScanning]     = useState(false);
+const [scanStep, setScanStep]     = useState(0);
+const [scanPct, setScanPct]       = useState(0);
+const [recalls, setRecalls]       = useState(null);
+const [vinInfo, setVinInfo]       = useState(null);
+const [vinError, setVinError]     = useState(null);
+const [models, setModels]         = useState([]);
+const fileRef = useRef();
 
-  const toggleSave = id => setSaved(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
+const [form, setForm] = useState({
+year:"", make:"", model:"", mileage:"", vin:"", state:"",
+issueDesc:"", started:"", frequency:"",
+dealerVisits:"", visitCount:"", outcome:"", cost:"", dealerNotes:"",
+name:"", email:"", phone:"",
+});
+const setF = (k, v) => setForm(f => ({ ...f, [k]: v }));
+const toggleIssue = id => setSelIssues(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
+const toggleHero  = id => setHeroIssues(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
 
-  const filtered = ALL_SUITS.filter(s => {
-    const mc = activeCat === "all" || s.cat === activeCat;
-    const q = search.toLowerCase();
-    const ms = !q || s.company.toLowerCase().includes(q) || s.desc.toLowerCase().includes(q);
-    return mc && ms;
-  });
+const fetchModels = useCallback(async (make, year) => {
+if (!make || !year) return;
+try {
+const r = await fetch(NHTSA_MODELS(make, year));
+const d = await r.json();
+setModels((d.Results || []).map(m => m.Model_Name).sort());
+} catch { setModels([]); }
+}, []);
 
-  const totalSaved = ALL_SUITS.filter(s => saved.includes(s.id)).reduce((a, s) => a + s.payout, 0);
-  const countByCat = id => id === "all" ? ALL_SUITS.length : ALL_SUITS.filter(s => s.cat === id).length;
-  const urgentCount = ALL_SUITS.filter(s => s.urgent).length;
+const SCAN_STEPS = ["Connecting to NHTSA database...","Decoding VIN...","Fetching recall records...","Matching defect patterns...","Analyzing results..."];
 
-  return (
-    <div className="app">
-      <style>{CSS}</style>
+const runVinScan = async () => {
+if (!form.vin || form.vin.length !== 17) return;
+setScanning(true); setScanStep(0); setScanPct(0);
+setRecalls(null); setVinInfo(null); setVinError(null);
+try {
+setScanStep(1); setScanPct(20);
+const vd = await (await fetch(NHTSA_DECODE(form.vin))).json();
+const get = n => (vd.Results || []).find(r => r.Variable === n)?.Value || "";
+const info = { year: get("Model Year"), make: get("Make"), model: get("Model"), trim: get("Trim") };
+if (!info.make || info.make === "Not Applicable") throw new Error("VIN not recognized. Please check and try again.");
+setVinInfo(info);
+if (!form.year) setF("year", info.year);
+if (!form.make) setF("make", info.make);
+if (!form.model) setF("model", info.model);
+setScanStep(2); setScanPct(40);
+const rd = await (await fetch(NHTSA_RECALL(form.vin))).json();
+let recallList = rd.results || [];
+setScanStep(3); setScanPct(60);
+if (info.make && info.model && info.year) {
+try {
+const rd2 = await (await fetch(NHTSA_VEHICLE(info.make, info.model, info.year))).json();
+const existing = new Set(recallList.map(r => r.NHTSACampaignNumber));
+(rd2.results || []).forEach(r => { if (!existing.has(r.NHTSACampaignNumber)) recallList.push(r); });
+} catch {}
+}
+setScanStep(4); setScanPct(80);
+await new Promise(r => setTimeout(r, 500));
+setScanStep(5); setScanPct(100);
+await new Promise(r => setTimeout(r, 300));
+setRecalls(recallList);
+} catch (e) {
+setVinError(e.message || "Failed to connect to NHTSA. Check VIN and try again.");
+}
+setScanning(false);
+};
 
-      {notif && (
-        <div className="notif">
-          <div className="notif-dot"/>
-          <div className="notif-text">
-            <strong>⏰ {urgentCount} urgent deadlines</strong> — TikTok (Jul 30), Facebook (Aug 1), Honda Oil (Aug 30), Ford Transmission (Dec 31). <span style={{textDecoration:"underline",cursor:"pointer"}} onClick={()=>setTab("home")}>Check eligibility →</span>
+const recallSev = r => {
+const t = (r.Consequence || "").toLowerCase();
+if (t.includes("death") || t.includes("fatal") || t.includes("fire")) return { label:"CRITICAL", color:"#ef4444" };
+if (t.includes("injur") || t.includes("crash")) return { label:"HIGH", color:"#f97316" };
+return { label:"MODERATE", color:"#f59e0b" };
+};
+
+const openModal = () => { setShowModal(true); setStepIdx(0); setDone(false); };
+const canNext = () => {
+if (stepIdx === 0) return form.year && form.make && form.model;
+if (stepIdx === 4) return form.name && form.email;
+return true;
+};
+
+const step = STEPS[stepIdx];
+const pct  = Math.round((stepIdx / (STEPS.length - 1)) * 100);
+const fakeFile = () => {
+const names = ["repair_invoice.pdf","dealer_estimate.pdf","warranty_denial.jpg","engine_photos.zip","service_record.pdf"];
+setFiles(f => [...f, names[Math.floor(Math.random() * names.length)]]);
+};
+
+const US_STATES = ["Alabama","Alaska","Arizona","Arkansas","California","Colorado","Connecticut","Delaware","Florida","Georgia","Hawaii","Idaho","Illinois","Indiana","Iowa","Kansas","Kentucky","Louisiana","Maine","Maryland","Massachusetts","Michigan","Minnesota","Mississippi","Missouri","Montana","Nebraska","Nevada","New Hampshire","New Jersey","New Mexico","New York","North Carolina","North Dakota","Ohio","Oklahoma","Oregon","Pennsylvania","Rhode Island","South Carolina","South Dakota","Tennessee","Texas","Utah","Vermont","Virginia","Washington","West Virginia","Wisconsin","Wyoming"];
+
+return (
+<div className="app">
+<style>{CSS}</style>
+
+<nav className="nav">
+<div className="nav-brand">
+<div className="nav-mark">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#00C2A8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+<path d="M9 12l2 2 4-4"/>
+            </svg>
           </div>
-          <button className="notif-x" onClick={()=>setNotif(false)}>✕</button>
+<span className="nav-name">ClaimCheck</span>
+<span className="nav-tag"> Vehicle</span>
         </div>
-      )}
-
-      <nav className="nav">
-        <div className="nav-logo" onClick={()=>setTab("home")}>
-          <div className="nav-logo-icon">⚖️</div>
-          <div className="nav-logo-name">ClaimCheck</div>
+<div className="nav-links">
+{["How It Works","Vehicle Issues","FAQ"].map(l => (
+<button key={l} className="nav-link">{l}</button>
+))}
         </div>
-        <div className="nav-center">
-          {[["home","Browse",null],["saved","Saved",saved.length||null],["profile","Profile",null]].map(([id,lbl,badge])=>(
-            <button key={id} className={"ntab"+(tab===id?" on":"")} onClick={()=>setTab(id)}>
-              {lbl}{badge?<span className={"nbadge"+(id==="saved"?" g":"")}>{badge}</span>:null}
-            </button>
-          ))}
-        </div>
-        <div className="nav-right">
-          {totalSaved>0 && <div className="pot-pill" onClick={()=>setTab("saved")}>💰 ${totalSaved.toLocaleString()} potential</div>}
-          <button className="nav-btn" onClick={()=>setTab("saved")}>My Cases {saved.length>0?"("+saved.length+")":""}</button>
-        </div>
+<button className="nav-cta" onClick={openModal}>Document My Issue →</button>
       </nav>
 
-      {tab === "home" && (
-        <>
-          <div className="hero">
-            <div className="hero-tag"><div className="hero-dot"/>Free · Tech & Privacy · Automotive</div>
-            <h1 className="hero-h1">Are you owed<br/><em>money?</em></h1>
-            <p className="hero-sub">From data breaches to defective cars, contaminated food to predatory loans — corporations owe billions every year. Find every dollar across 5 categories in one place.</p>
-
-            {/* Category switcher */}
-            <div className="cat-switcher">
-              {CATEGORIES.map(cat => (
-                <button key={cat.id} className={"cat-btn"+(activeCat===cat.id?" on":"")} onClick={()=>setActiveCat(cat.id)} style={activeCat===cat.id?{borderColor:cat.color+"55",background:cat.color+"10"}:{}}>
-                  <span className="cat-icon">{cat.icon}</span>
-                  <div style={{textAlign:"left"}}>
-                    <div className="cat-label">{cat.label}</div>
-                    <div style={{fontSize:10,color:activeCat===cat.id?cat.color:"#3f3f46",marginTop:1}}>
-                      {cat.id==="all" ? ALL_SUITS.length+" cases" : countByCat(cat.id)+" cases"}
-                    </div>
-                  </div>
-                  {activeCat===cat.id && (
-                    <span className="cat-count" style={{background:cat.color+"20",color:cat.color,border:"1px solid "+cat.color+"44"}}>
-                      {countByCat(cat.id)}
-                    </span>
-                  )}
-                </button>
-              ))}
-              {/* All categories are now live */}
-            </div>
-
-            <AIBox onMatch={ids=>{setHl(ids);setTimeout(()=>document.getElementById("browse-grid")?.scrollIntoView({behavior:"smooth"}),300);}}/>
-          </div>
-
-          <div className="stats">
-            {[
-              {n:ALL_SUITS.length, l:"Open Settlements", c:"#f97316"},
-              {n:"2", l:"Verticals Live", c:"#6366f1"},
-              {n:"$250K+", l:"Max Per Person", c:"#22d3a0"},
-              {n:"Free", l:"Always Free to Check", c:"#e8e4dc"},
-            ].map((s,i)=>(
-              <div key={i} className="stat">
-                <div className="stat-n" style={{color:s.c}}>{s.n}</div>
-                <div className="stat-l">{s.l}</div>
-              </div>
-            ))}
-          </div>
-
-          {/* Auto VIN scanner — only show when auto or all is selected */}
-          {(activeCat === "auto" || activeCat === "all") && (
-            <VINScanner onSuitOpen={setActive}/>
-          )}
-
-          {/* Browse grid */}
-          <div className="browse">
-            <div className="sec-head" id="browse-grid">
-              <div className="sec-title">
-                {activeCat === "all" ? "All Open Cases" : CATEGORIES.find(c=>c.id===activeCat)?.label + " Cases"}
-              </div>
-              <div style={{fontSize:13,color:"#52525b"}}>{filtered.length} showing</div>
-            </div>
-            <div className="filter-row">
-              {CATEGORIES.filter(c=>c.id!=="all").map(c=>(
-                <button key={c.id} className={"fpill"+(activeCat===c.id?" on":"")} onClick={()=>setActiveCat(c.id)} style={activeCat===c.id?{background:c.color+"12",borderColor:c.color+"44",color:c.color}:{}}>
-                  {c.icon} {c.label}
-                </button>
-              ))}
-              <button className={"fpill"+(activeCat==="all"?" on":"")} onClick={()=>setActiveCat("all")}>All ({ALL_SUITS.length})</button>
-            </div>
-            <div className="search-wrap">
-              <span className="search-icon">🔍</span>
-              <input className="search-in" placeholder="Search company, issue, or keyword..." value={search} onChange={e=>setSearch(e.target.value)}/>
-            </div>
-            <div className="grid">
-              {filtered.map(s=><SuitCard key={s.id} s={s} saved={saved.includes(s.id)} hl={hl.includes(s.id)} onSave={toggleSave} onOpen={setActive}/>)}
-            </div>
-            {filtered.length===0 && (
-              <div style={{textAlign:"center",padding:"52px 0",color:"#3f3f46"}}>
-                <div style={{fontSize:40,marginBottom:10}}>🔎</div>
-                <div style={{fontSize:16,fontWeight:700}}>No matching cases</div>
-              </div>
-            )}
-          </div>
-
-          <div className="disc">
-            ClaimCheck is not a law firm and does not provide legal advice. Eligibility estimates only.<br/>
-            Auto recall data sourced live from the NHTSA federal database (nhtsa.gov). Settlement matching is approximate.
-          </div>
-        </>
-      )}
-
-      {tab === "saved" && <SavedPage saved={saved} onUnsave={toggleSave} onBrowse={()=>setTab("home")} onOpen={setActive}/>}
-
-      {tab === "profile" && (
-        <div style={{maxWidth:680,margin:"0 auto",padding:"48px 24px 80px"}}>
-          <div style={{fontSize:32,fontWeight:900,letterSpacing:-1,marginBottom:8}}>My Profile</div>
-          <div style={{fontSize:15,color:"#71717a",marginBottom:36,lineHeight:1.6}}>Save your info once. We'll auto-match you against every new settlement across all categories.</div>
-          {[["Full Name","Jane Smith"],["Email","jane@example.com"],["State",""],["ZIP Code","10001"],["Devices Owned","iPhone, MacBook, Android..."],["Services Used","Facebook, Google, TikTok, Amazon..."],["Phone Carriers","T-Mobile, Verizon, AT&T..."],["Vehicles Owned","2018 Honda CR-V, 2015 VW Jetta TDI..."]].map(([l,p])=>(
-            <div key={l} style={{marginBottom:14}}>
-              <div style={{fontSize:12,fontWeight:700,color:"#52525b",marginBottom:5}}>{l}</div>
-              {l==="State" ? (
-                <select style={{width:"100%",background:"#0d0d16",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,color:"#e8e4dc",fontFamily:"inherit",fontSize:14,padding:"11px 13px",outline:"none"}}>
-                  <option value="">Select state...</option>
-                  {["Alabama","Alaska","Arizona","Arkansas","California","Colorado","Connecticut","Delaware","Florida","Georgia","Hawaii","Idaho","Illinois","Indiana","Iowa","Kansas","Kentucky","Louisiana","Maine","Maryland","Massachusetts","Michigan","Minnesota","Mississippi","Missouri","Montana","Nebraska","Nevada","New Hampshire","New Jersey","New Mexico","New York","North Carolina","North Dakota","Ohio","Oklahoma","Oregon","Pennsylvania","Rhode Island","South Carolina","South Dakota","Tennessee","Texas","Utah","Vermont","Virginia","Washington","West Virginia","Wisconsin","Wyoming"].map(s=><option key={s}>{s}</option>)}
-                </select>
-              ) : (
-                <input placeholder={p} style={{width:"100%",background:"#0d0d16",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,color:"#e8e4dc",fontFamily:"inherit",fontSize:14,padding:"11px 13px",outline:"none"}}/>
-              )}
-            </div>
-          ))}
-          <button style={{background:"linear-gradient(135deg,#f97316,#ef4444)",color:"#fff",border:"none",borderRadius:11,padding:"13px 26px",fontFamily:"inherit",fontSize:15,fontWeight:800,cursor:"pointer",marginTop:8}}>
-            Save Profile
+<section className="hero">
+<div className="hero-glow"/>
+<div className="hero-grid"/>
+<div className="hero-eye"><span className="eye-dot"/> Consumer Vehicle Advocacy Platform</div>
+<h1 className="hero-h1">Your car has a problem.<br/><span className="hero-em">You deserve answers.</span></h1>
+<p className="hero-sub">ClaimCheck helps vehicle owners document recurring defects, organize repair evidence, and understand their options — simply and clearly.</p>
+<div className="hero-actions">
+<button className="btn-primary" onClick={openModal}>
+            Start My Documentation
+<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
           </button>
+<button className="btn-ghost">See How It Works</button>
         </div>
-      )}
+<div className="hero-proof">
+{["Free to use — always","No obligation to file","Your data stays private","Results in 1–2 business days"].map(t => (
+<div key={t} className="proof-item"><span className="proof-check">✓</span> {t}</div>
+))}
+        </div>
+      </section>
 
-      {active && <SuitModal s={active} onClose={()=>setActive(null)} saved={saved.includes(active.id)} onSave={toggleSave}/>}
+<div className="makes">
+<span className="makes-label">We cover</span>
+{["Toyota","Honda","Ford","Chevrolet","Volkswagen","Tesla","Jeep","Ram","Nissan","Hyundai","BMW","Subaru"].map(m => (
+<div key={m} className={"make-pill" + (["Toyota","Honda"].includes(m) ? " hl" : "")}>{m}</div>
+))}
+<div className="make-pill" style={{color:"var(--muted)"}}>+ All Makes</div>
+      </div>
+
+<section className="section">
+<div className="inner">
+<div className="sec-label">How it works</div>
+<h2 className="sec-h">Three steps to clarity.</h2>
+<p className="sec-sub">No legal jargon. No pressure. Just a clear path to understanding your situation.</p>
+<div className="steps-row">
+{[
+{n:"01",icon:"📋",title:"Document your issue",desc:"Tell us about your vehicle and the problem you're experiencing. Takes about 5 minutes. We guide you through every step."},
+{n:"02",icon:"🔍",title:"We review and match",desc:"We cross-reference your submission with known defect patterns, active NHTSA recalls, TSBs, and available options for your vehicle."},
+{n:"03",icon:"🛤️",title:"Understand your options",desc:"We send you a clear summary — from manufacturer escalation to warranty programs to legal review. You decide what's right for you."},
+].map((s, i) => (
+<div key={i} className="step-card">
+<div className="step-n">{s.n}</div>
+<div className="step-icon">{s.icon}</div>
+<div className="step-title">{s.title}</div>
+<div className="step-desc">{s.desc}</div>
+              </div>
+))}
+          </div>
+        </div>
+      </section>
+
+<section className="section alt">
+<div className="inner">
+<div className="sec-label">Common vehicle defects</div>
+<h2 className="sec-h">Recognize your issue?</h2>
+<p className="sec-sub">Select the issue affecting your vehicle. We'll match it against known defect patterns instantly.</p>
+<div className="issues-grid">
+{ISSUES.map(iss => (
+<div key={iss.id} className={"issue-card" + (heroIssues.includes(iss.id) ? " sel" : "")} onClick={() => toggleHero(iss.id)}>
+<div className="ic-icon">{iss.icon}</div>
+<div className="ic-name">{iss.name}</div>
+<div className="ic-desc">{iss.desc}</div>
+              </div>
+))}
+          </div>
+{heroIssues.length > 0 && (
+<div style={{marginTop:24,textAlign:"center"}}>
+<button className="btn-primary" style={{margin:"0 auto"}} onClick={() => { setSelIssues(heroIssues); openModal(); }}>
+                Document My {ISSUES.find(i => i.id === heroIssues[0])?.name} Issue →
+              </button>
+            </div>
+)}
+        </div>
+      </section>
+
+<section className="section dark">
+<div className="inner">
+<div className="sec-label lt">By the numbers</div>
+<h2 className="sec-h lt">Helping owners get answers.</h2>
+<p className="sec-sub lt">ClaimCheck has helped thousands of vehicle owners document their issues and understand their options.</p>
+<div className="trust-grid">
+{[{n:"47K+",l:"Defect reports\ndocumented"},{n:"$2.3B",l:"In potential\nreimbursement identified"},{n:"340+",l:"Unique defect\npatterns tracked"},{n:"91%",l:"Owners received\na clear next step"}].map((t, i) => (
+<div key={i} className="trust-stat">
+<div className="ts-n">{t.n}</div>
+<div className="ts-l" style={{whiteSpace:"pre-line"}}>{t.l}</div>
+              </div>
+))}
+          </div>
+        </div>
+      </section>
+
+<section className="section">
+<div className="inner">
+<div className="sec-label">Owner stories</div>
+<h2 className="sec-h">Real people. Real outcomes.</h2>
+<p className="sec-sub">We don't promise outcomes. We give people a fair shot at understanding what they may be entitled to.</p>
+<div className="testi-grid">
+{[
+{q:"I'd been dealing with my Toyota's oil consumption for three years. ClaimCheck helped me document everything properly. Ended up getting a full engine replacement covered.",name:"Marcus T.",detail:"2019 Toyota Camry · Texas"},
+{q:"Didn't feel like a lawsuit site at all. It felt like a really organized way to finally get my repair history together. The process was clear and fast.",name:"Jennifer K.",detail:"2018 Honda CR-V · Ohio"},
+{q:"My dealership kept dismissing my transmission concerns. Having everything documented made a huge difference when I escalated to the manufacturer directly.",name:"David R.",detail:"2020 Ford Explorer · Florida"},
+].map((t, i) => (
+<div key={i} className="testi">
+<div className="testi-quote">"{t.q}"</div>
+<div className="testi-name">{t.name}</div>
+<div className="testi-detail">{t.detail}</div>
+              </div>
+))}
+          </div>
+        </div>
+      </section>
+
+<section className="section alt">
+<div className="inner" style={{textAlign:"center"}}>
+<div className="sec-label">FAQ</div>
+<h2 className="sec-h">Questions we hear a lot.</h2>
+<p className="sec-sub" style={{margin:"0 auto 44px"}}>Honest answers about what ClaimCheck is — and what it isn't.</p>
+<div className="faqs">
+{FAQS_DATA.map((f, i) => <FaqItem key={i} {...f}/>)}
+          </div>
+        </div>
+      </section>
+
+<section className="section dark" style={{padding:"72px 28px",textAlign:"center"}}>
+<div style={{maxWidth:520,margin:"0 auto"}}>
+<h2 style={{fontFamily:"var(--serif)",fontSize:"clamp(30px,4vw,48px)",color:"#fff",marginBottom:12,letterSpacing:"-0.5px"}}>Ready to document your issue?</h2>
+<p style={{fontSize:15,color:"rgba(255,255,255,0.5)",lineHeight:1.75,marginBottom:32}}>Takes 5 minutes. Free to use. No commitment required.</p>
+<button className="btn-primary" style={{margin:"0 auto"}} onClick={openModal}>Start My Documentation →</button>
+        </div>
+      </section>
+
+<div className="disc">
+<p>ClaimCheck is a consumer documentation and advocacy platform, not a law firm. We do not provide legal advice. Connecting with our platform does not create an attorney-client relationship. Any legal options presented are provided by independent licensed attorneys. Outcomes are not guaranteed. Vehicle defect patterns and recall information are sourced from NHTSA, manufacturer TSBs, and consumer reports. All data encrypted and never sold to third parties.</p>
+      </div>
+
+<footer className="footer">
+<div className="footer-inner">
+<div className="footer-brand">ClaimCheck Vehicle</div>
+<div className="footer-links">
+{["Privacy","Terms","Contact","For Attorneys"].map(l => (
+<span key={l} className="footer-link">{l}</span>
+))}
+          </div>
+<div className="footer-copy">© 2025 ClaimCheck. All rights reserved.</div>
+        </div>
+      </footer>
+
+{showModal && !done && (
+<div className="overlay" onClick={e => e.target === e.currentTarget && setShowModal(false)}>
+<div className="modal">
+<button className="m-close" onClick={() => setShowModal(false)}>✕</button>
+
+{scanning ? (
+<div className="scan-wrap">
+<div className="scan-car">🚗</div>
+<div className="scan-title">Scanning NHTSA Database...</div>
+<div className="scan-sub">Pulling live federal recall records for your VIN</div>
+<div className="scan-track"><div className="scan-bar" style={{width:scanPct+"%"}}/></div>
+<div className="scan-steps">
+{SCAN_STEPS.map((s, i) => (
+<div key={i} className={"ss"+(i<scanStep-1?" done":i===scanStep-1?" act":" wait")}>
+{i<scanStep-1?<div className="ss-dot" style={{background:"var(--teal)"}}/>:i===scanStep-1?<div className="ss-spin"/>:<div className="ss-dot" style={{background:"#CBD5E1"}}/>}
+{s}
+                    </div>
+))}
+                </div>
+              </div>
+) : (
+<>
+<div className="m-progress">
+<div className="mp-top">
+<span className="mp-label">Step {stepIdx+1} of {STEPS.length} — {step.label}</span>
+<span className="mp-pct">{pct}%</span>
+                  </div>
+<div className="mp-track"><div className="mp-fill" style={{width:pct+"%"}}/></div>
+<div className="s-tabs">
+{STEPS.map((s, i) => <div key={i} className={"s-tab"+(i<stepIdx?" done":i===stepIdx?" cur":"")}/>)}
+                  </div>
+                </div>
+
+<div className="m-body">
+{stepIdx===0 && (
+<>
+<div className="m-tag">Vehicle Info</div>
+<div className="m-h">Tell us about your vehicle.</div>
+<div className="m-sub">We'll use this to match against known defect patterns and NHTSA recall data.</div>
+<div className="f-row">
+<div className="field">
+<label className="f-label">Year</label>
+<select className="f-select" value={form.year} onChange={e => { setF("year",e.target.value); if(form.make) fetchModels(form.make,e.target.value); }}>
+<option value="">Select year</option>
+{YEARS.map(y => <option key={y}>{y}</option>)}
+                          </select>
+                        </div>
+<div className="field">
+<label className="f-label">Make</label>
+<select className="f-select" value={form.make} onChange={e => { setF("make",e.target.value); setF("model",""); if(form.year) fetchModels(e.target.value,form.year); }}>
+<option value="">Select make</option>
+{MAKES.map(m => <option key={m}>{m}</option>)}
+                          </select>
+                        </div>
+                      </div>
+<div className="f-row">
+<div className="field">
+<label className="f-label">Model</label>
+{models.length>0 ? (
+<select className="f-select" value={form.model} onChange={e => setF("model",e.target.value)}>
+<option value="">Select model</option>
+{models.map(m => <option key={m}>{m}</option>)}
+                            </select>
+) : (
+<input className="f-input" placeholder="e.g. Camry, CR-V, F-150" value={form.model} onChange={e => setF("model",e.target.value)}/>
+)}
+                        </div>
+<div className="field">
+<label className="f-label">Current Mileage</label>
+<input className="f-input" placeholder="e.g. 68,000" value={form.mileage} onChange={e => setF("mileage",e.target.value)}/>
+                        </div>
+                      </div>
+<div className="field">
+<label className="f-label">VIN <span className="f-opt">(optional — pulls live NHTSA recall data)</span></label>
+<div style={{display:"flex",gap:8}}>
+<input className="f-input" placeholder="17-character VIN from door jamb or dashboard" value={form.vin} maxLength={17} onChange={e => { setF("vin",e.target.value.replace(/[^A-Za-z0-9]/g,"").toUpperCase()); setRecalls(null); setVinInfo(null); }} style={{flex:1}}/>
+{form.vin.length===17 && (
+<button onClick={runVinScan} style={{background:"var(--teal)",color:"var(--navy)",border:"none",borderRadius:10,padding:"0 16px",fontSize:13,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>Scan →</button>
+)}
+                        </div>
+<div className="f-hint">{form.vin.length>0 ? form.vin.length+"/17 characters" : "Found on dashboard (driver side), door jamb sticker, or insurance card."}</div>
+{vinError && <div style={{background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:9,padding:"10px 13px",fontSize:13,color:"#dc2626",marginTop:8}}>{vinError}</div>}
+{vinInfo && <div style={{background:"rgba(0,194,168,0.07)",border:"1px solid rgba(0,194,168,0.2)",borderRadius:9,padding:"10px 13px",fontSize:13,marginTop:8}}><strong>✓ VIN Decoded:</strong> {vinInfo.year} {vinInfo.make} {vinInfo.model} {vinInfo.trim}</div>}
+{recalls!==null && (
+<div style={{marginTop:12}}>
+{recalls.length===0 ? (
+<div style={{background:"rgba(34,197,94,0.06)",border:"1px solid rgba(34,197,94,0.2)",borderRadius:10,padding:"12px 14px",fontSize:13,color:"var(--slate)",textAlign:"center"}}>✅ No open NHTSA recalls found for this vehicle.</div>
+) : (
+<>
+<div style={{fontSize:11,fontWeight:700,color:"#ef4444",textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>⚠️ {recalls.length} Open NHTSA Recall{recalls.length!==1?"s":""} Found</div>
+{recalls.slice(0,3).map((r,i) => {
+const sev = recallSev(r);
+return (
+<div key={i} className="recall-item" style={{borderLeftColor:sev.color}}>
+<div className="ri-top">
+<span className="ri-badge" style={{background:sev.color+"20",color:sev.color,border:"1px solid "+sev.color+"44"}}>{sev.label}</span>
+{r.Component && <span style={{fontSize:11,fontWeight:600,color:"var(--slate)"}}>{r.Component.split(":")[0]}</span>}
+                                      </div>
+<div className="ri-summary">{r.Summary ? r.Summary.substring(0,160)+(r.Summary.length>160?"...":"") : "See NHTSA for full details."}</div>
+                                    </div>
+);
+})}
+{recalls.length>3 && <div style={{fontSize:12,color:"var(--slate)",marginTop:6}}>+ {recalls.length-3} more recall{recalls.length-3!==1?"s":""} documented in your report.</div>}
+                              </>
+)}
+                          </div>
+)}
+                      </div>
+<div className="field">
+<label className="f-label">Your State</label>
+<select className="f-select" value={form.state} onChange={e => setF("state",e.target.value)}>
+<option value="">Select state</option>
+{US_STATES.map(s => <option key={s}>{s}</option>)}
+                        </select>
+                      </div>
+<div className="trust-badge">
+<span style={{fontSize:15,flexShrink:0}}>🔒</span>
+<span className="tb-text">Your information is encrypted and never sold to third parties. This creates a private documentation record for your use only.</span>
+                      </div>
+                    </>
+)}
+
+{stepIdx===1 && (
+<>
+<div className="m-tag">The Problem</div>
+<div className="m-h">What's been happening?</div>
+<div className="m-sub">Select all that apply, then describe the issue in your own words.</div>
+<div className="field">
+<label className="f-label">Issue type <span className="f-opt">(select all that apply)</span></label>
+<div className="chips">
+{ISSUES.map(iss => (
+<div key={iss.id} className={"chip"+(selIssues.includes(iss.id)?" on":"")} onClick={() => toggleIssue(iss.id)}>{iss.icon} {iss.name}</div>
+))}
+                        </div>
+                      </div>
+<div className="field">
+<label className="f-label">Describe the issue in your own words</label>
+<textarea className="f-ta" placeholder="Be as specific as possible — symptoms, when they started, frequency, conditions, and what the dealership told you..." value={form.issueDesc} onChange={e => setF("issueDesc",e.target.value)}/>
+<div className="f-hint">The more detail you include, the better we can match your issue to known defect patterns.</div>
+                      </div>
+<div className="f-row">
+<div className="field">
+<label className="f-label">When did this start?</label>
+<select className="f-select" value={form.started} onChange={e => setF("started",e.target.value)}>
+<option value="">Select timeframe</option>
+{["Under warranty","Just after warranty expired","Within the first year","1–2 years ago","2–3 years ago","More than 3 years ago"].map(o => <option key={o}>{o}</option>)}
+                          </select>
+                        </div>
+<div className="field">
+<label className="f-label">How often does it occur?</label>
+<select className="f-select" value={form.frequency} onChange={e => setF("frequency",e.target.value)}>
+<option value="">Select frequency</option>
+{["Every time I drive","Several times a week","Once a week","Occasionally","Intermittent / unpredictable"].map(o => <option key={o}>{o}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                    </>
+)}
+
+{stepIdx===2 && (
+<>
+<div className="m-tag">Repair History</div>
+<div className="m-h">What have you tried so far?</div>
+<div className="m-sub">This helps us understand what documentation you have and what may strengthen your case.</div>
+<div className="field">
+<label className="f-label">Have you visited a dealership or mechanic?</label>
+<div className="chips">
+{["Yes — dealership","Yes — independent shop","Both","Not yet"].map(o => (
+<div key={o} className={"chip"+(form.dealerVisits===o?" on":"")} onClick={() => setF("dealerVisits",o)}>{o}</div>
+))}
+                        </div>
+                      </div>
+{form.dealerVisits && form.dealerVisits!=="Not yet" && (
+<>
+<div className="field">
+<label className="f-label">How many times have you taken it in for this issue?</label>
+<div className="chips">
+{["1 time","2–3 times","4–5 times","More than 5 times"].map(o => (
+<div key={o} className={"chip"+(form.visitCount===o?" on":"")} onClick={() => setF("visitCount",o)}>{o}</div>
+))}
+                            </div>
+                          </div>
+<div className="field">
+<label className="f-label">What was the outcome?</label>
+<div className="chips">
+{DEALER_OUTCOMES.map(o => (
+<div key={o} className={"chip"+(form.outcome===o?" on":"")} style={{fontSize:12}} onClick={() => setF("outcome",o)}>{o}</div>
+))}
+                            </div>
+                          </div>
+                        </>
+)}
+<div className="field">
+<label className="f-label">Out-of-pocket repair costs so far</label>
+<div className="chips">
+{COST_RANGES.map(o => (
+<div key={o} className={"chip"+(form.cost===o?" on":"")} style={{fontSize:12}} onClick={() => setF("cost",o)}>{o}</div>
+))}
+                        </div>
+                      </div>
+<div className="field">
+<label className="f-label">Anything the dealer or manufacturer told you? <span className="f-opt">optional</span></label>
+<textarea className="f-ta" style={{minHeight:70}} placeholder="e.g. Service advisor said oil consumption was within spec..." value={form.dealerNotes} onChange={e => setF("dealerNotes",e.target.value)}/>
+                      </div>
+                    </>
+)}
+
+{stepIdx===3 && (
+<>
+<div className="m-tag">Documentation</div>
+<div className="m-h">Upload your evidence.</div>
+<div className="m-sub">Upload whatever you have. Even partial documentation helps — we'll tell you what else may be useful.</div>
+<div className={"upload-zone"+(drag?" drag":"")} onDragOver={e=>{e.preventDefault();setDrag(true);}} onDragLeave={()=>setDrag(false)} onDrop={e=>{e.preventDefault();setDrag(false);fakeFile();}} onClick={()=>fileRef.current?.click()}>
+<div className="uz-icon">📎</div>
+<div className="uz-title">Drop files here or click to browse</div>
+<div className="uz-sub">PDF, JPG, PNG, ZIP up to 25MB each</div>
+<div className="uz-tags">
+{["Repair invoices","Service records","Dealer estimates","Warranty denials","Defect photos","TSB notices"].map(t => <span key={t} className="uz-tag">{t}</span>)}
+                        </div>
+                      </div>
+<input ref={fileRef} type="file" multiple style={{display:"none"}} onChange={fakeFile}/>
+{files.map((f,i) => (
+<div key={i} className="uploaded">
+<span style={{fontSize:16}}>📄</span>
+<span className="uf-name">{f}</span>
+<span className="uf-ok">✓</span>
+                        </div>
+))}
+{files.length>0 && <div className="chip" style={{marginTop:8,fontSize:12,cursor:"pointer",display:"inline-flex"}} onClick={fakeFile}>+ Add another file</div>}
+<div className="trust-badge" style={{marginTop:12}}>
+<span style={{fontSize:15,flexShrink:0}}>💡</span>
+<span className="tb-text">Don't have all your documents? No problem — submit now and add files later. Getting your case on record is what matters most.</span>
+                      </div>
+                    </>
+)}
+
+{stepIdx===4 && (
+<>
+<div className="m-tag">Almost done</div>
+<div className="m-h">Where should we send your results?</div>
+<div className="m-sub">We'll review your submission and send a personalized summary within 1–2 business days.</div>
+<div className="field">
+<label className="f-label">Full Name</label>
+<input className="f-input" placeholder="Your name" value={form.name} onChange={e => setF("name",e.target.value)}/>
+                      </div>
+<div className="field">
+<label className="f-label">Email Address</label>
+<input className="f-input" type="email" placeholder="you@email.com" value={form.email} onChange={e => setF("email",e.target.value)}/>
+<div className="f-hint">We'll send your documentation summary and any recall findings here. No spam, ever.</div>
+                      </div>
+<div className="field">
+<label className="f-label">Phone Number <span className="f-opt">optional — for a callback if needed</span></label>
+<input className="f-input" type="tel" placeholder="(555) 000-0000" value={form.phone} onChange={e => setF("phone",e.target.value)}/>
+                      </div>
+<div style={{background:"var(--warm)",borderRadius:10,padding:"13px 15px",fontSize:12,color:"var(--slate)",lineHeight:1.7,marginTop:8}}>
+                        By submitting, you agree to our Privacy Policy and Terms of Service. You are not retaining legal counsel. If your case qualifies for legal review, you may be contacted by an independent licensed attorney — optional and at no cost.
+                      </div>
+                    </>
+)}
+
+<div className="m-nav">
+{stepIdx>0 && <button className="btn-back" onClick={() => setStepIdx(s => s-1)}>← Back</button>}
+<button className="btn-next" disabled={!canNext()} onClick={() => { if(stepIdx===STEPS.length-1){setShowModal(false);setDone(true);}else setStepIdx(s => s+1); }}>
+{stepIdx===STEPS.length-1 ? "Submit My Documentation" : "Continue →"}
+                    </button>
+                  </div>
+                </div>
+              </>
+)}
+          </div>
+        </div>
+)}
+
+{done && (
+<div className="overlay" onClick={() => setDone(false)}>
+<div className="modal" onClick={e => e.stopPropagation()}>
+<button className="m-close" onClick={() => setDone(false)}>✕</button>
+<div className="success">
+<div className="s-icon">✅</div>
+<div className="s-h">Your documentation is submitted.</div>
+<div className="s-sub">
+                We're reviewing your {form.year} {form.make} {form.model} case now.
+{recalls && recalls.length>0 && " We found "+recalls.length+" open NHTSA recall"+(recalls.length!==1?"s":"")+" on your vehicle — included in your report."}
+{" "}Expect your summary within 1–2 business days.
+              </div>
+<div className="s-next">
+<div className="sn-title">What happens next</div>
+{["We cross-reference your issue with known defect patterns and NHTSA recall data","We check for active TSBs, warranty extensions, and legal options specific to your state","You receive a clear summary of findings and available options — no pressure, no obligation"].map((s,i) => (
+<div key={i} className="sn-item"><div className="sn-dot"/><span>{s}</span></div>
+))}
+              </div>
+<button className="btn-next" style={{marginTop:18}} onClick={() => setDone(false)}>Done</button>
+            </div>
+          </div>
+        </div>
+)}
     </div>
-  );
+);
 }
