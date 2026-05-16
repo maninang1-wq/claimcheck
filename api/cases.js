@@ -22,12 +22,12 @@ export default async function handler(req, res) {
     const response = await fetch(
       `${SUPABASE_URL}/rest/v1/cases?status=eq.active&order=urgent.desc,payout.desc`,
       {
-              headers: {
+        headers: {
           'apikey': SUPABASE_KEY,
-                      'Authorization': `Bearer ${SUPABASE_KEY}`,
-                      'Content-Type': 'application/json',
-            },
-    }
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json',
+        },
+      }
     );
 
     if (!response.ok) {
