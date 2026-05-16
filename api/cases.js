@@ -1,8 +1,3 @@
-// api/cases.js
-// Serves active cases from Supabase to the frontend.
-// Called by App.jsx on load instead of using hardcoded data.
-// Vercel serverless function — runs server-side.
-
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
@@ -36,7 +31,6 @@ export default async function handler(req, res) {
 
     const cases = await response.json();
     return res.status(200).json({ cases, count: cases.length });
-
   } catch (err) {
     console.error('Cases API error:', err);
     return res.status(500).json({ error: 'Failed to load cases' });
